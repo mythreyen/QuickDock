@@ -195,6 +195,9 @@ public partial class MainWindow : Window
         _isOpening = true;
         _lastShowTick = Environment.TickCount64;
 
+        DwmHelper.DismissStartupFeedback();
+        System.Windows.Input.Mouse.OverrideCursor = null;
+
         ApplyTheme(DwmHelper.IsDarkModeEnabled());
 
         if (WindowState != WindowState.Normal)
@@ -319,6 +322,8 @@ public partial class MainWindow : Window
     /// </summary>
     public void ToggleFlyout(double? cursorX = null, double? cursorY = null)
     {
+        DwmHelper.DismissStartupFeedback();
+        System.Windows.Input.Mouse.OverrideCursor = null;
         long now = Environment.TickCount64;
         DwmHelper.Log($"ToggleFlyout entry: now - show = {now - _lastShowTick}, now - hide = {now - _lastHideTick}, Visibility={Visibility}, isClosing={_isClosing}, isOpening={_isOpening}, Cursor=({cursorX},{cursorY})");
 

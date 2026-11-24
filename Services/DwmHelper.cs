@@ -179,6 +179,106 @@ public static class DwmHelper
 
     private static readonly object _logLock = new();
 
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+    private static extern IntPtr CreateWindowEx(
+        uint dwExStyle,
+        string lpClassName,
+        string lpWindowName,
+        uint dwStyle,
+        int x,
+        int y,
+        int nWidth,
+        int nHeight,
+        IntPtr hWndParent,
+        IntPtr hMenu,
+        IntPtr hInstance,
+        IntPtr lpParam);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DestroyWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool PostThreadMessage(uint idThread, uint msg, IntPtr wParam, IntPtr lParam);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MSG
+    {
+        public IntPtr hwnd;
+        public uint message;
+        public IntPtr wParam;
+        public IntPtr lParam;
+        public uint time;
+        public int ptX;
+        public int ptY;
+        public uint lPrivate;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern int GetMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetModuleHandle(string? lpModuleName);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr LoadCursor(IntPtr hInstance, int lpCursorName);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SetCursor(IntPtr hCursor);
+
+    public const int IDC_ARROW = 32512;
+
+    /// <summary>
+    /// Dismisses the Windows Shell app-starting / busy feedback cursor (IDC_APPSTARTING)
+    /// which Windows Explorer attaches when launching a GUI application from the taskbar/shortcut.
+    /// Triggers the OS message-queue and window-lifecycle idle milestones so the cursor immediately
+    /// reverts to standard arrow without lingering for the 2-5 second Explorer feedback timeout.
+    /// </summary>
+    public static void DismissStartupFeedback()
+    {
+        try
+        {
+            uint threadId = GetCurrentThreadId();
+            IntPtr hInstance = GetModuleHandle(null);
+
+            // Create and briefly display a 0x0 popup window to satisfy Windows GUI startup milestone
+            IntPtr dummyHwnd = CreateWindowEx(
+                0,
+                "STATIC",
+                "",
+                0x80000000U /* WS_POPUP */,
+                0, 0, 0, 0,
+                IntPtr.Zero,
+                IntPtr.Zero,
+                hInstance,
+                IntPtr.Zero);
+
+            if (dummyHwnd != IntPtr.Zero)
+            {
+                ShowWindow(dummyHwnd, 5 /* SW_SHOW */);
+                PostThreadMessage(threadId, 0 /* WM_NULL */, IntPtr.Zero, IntPtr.Zero);
+                GetMessage(out _, IntPtr.Zero, 0, 0);
+                DestroyWindow(dummyHwnd);
+            }
+            else
+            {
+                PostThreadMessage(threadId, 0 /* WM_NULL */, IntPtr.Zero, IntPtr.Zero);
+                GetMessage(out _, IntPtr.Zero, 0, 0);
+            }
+
+            IntPtr arrow = LoadCursor(IntPtr.Zero, IDC_ARROW);
+            if (arrow != IntPtr.Zero)
+            {
+                SetCursor(arrow);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"DismissStartupFeedback error: {ex.Message}");
+        }
+    }
+
     public static void ForceForeground(IntPtr hwnd)
     {
         if (hwnd == IntPtr.Zero) return;

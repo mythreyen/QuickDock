@@ -91,7 +91,8 @@ public partial class App : Application
 
             _singleInstanceService.Dispose();
             _singleInstanceService = null;
-            Shutdown(0);
+            DwmHelper.DismissStartupFeedback();
+            Environment.Exit(0);
             return;
         }
 
