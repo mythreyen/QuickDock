@@ -243,6 +243,10 @@ public partial class MainWindow : Window
         await Task.Delay(240);
         _isOpening = false;
 
+        // If flyout was dismissed while opening animation was running, do not reposition or interfere
+        if (Visibility != Visibility.Visible || _isClosing)
+            return;
+
         // Ensure window position perfectly reflects final rendered content height
         RepositionWindow();
     }
@@ -316,23 +320,35 @@ public partial class MainWindow : Window
     public void ToggleFlyout(double? cursorX = null, double? cursorY = null)
     {
         long now = Environment.TickCount64;
-        DwmHelper.Log($"ToggleFlyout entry: now - show = {now - _lastShowTick}, now - hide = {now - _lastHideTick}, Visibility={Visibility}, Cursor=({cursorX},{cursorY})");
+        DwmHelper.Log($"ToggleFlyout entry: now - show = {now - _lastShowTick}, now - hide = {now - _lastHideTick}, Visibility={Visibility}, isClosing={_isClosing}, isOpening={_isOpening}, Cursor=({cursorX},{cursorY})");
 
-        // Protect against rapid accidental double clicks when summoned via taskbar icon
-        if (now - _lastShowTick < 650)
+        // Protect against rapid hardware switch bounce (< 100ms)
+        if (now - _lastShowTick < 100 || now - _lastHideTick < 100)
+        {
+            DwmHelper.Log("ToggleFlyout: debounced hardware bounce (< 100ms)");
             return;
+        }
 
+        // If the flyout is currently visible or actively animating out, the toggle action collapses it
+        if (Visibility == Visibility.Visible || _isClosing)
+        {
+            if (!_isClosing)
+            {
+                HideFlyout();
+            }
+            return;
+        }
+
+        // If the window recently closed due to losing focus (e.g. user clicked the taskbar button
+        // while the window was open, which fired Deactivated just before this TOGGLE command arrived),
+        // do not reopen it—the user's click was meant to collapse the open flyout.
         if (now - _lastHideTick < 350)
+        {
+            DwmHelper.Log($"ToggleFlyout: suppressed reopen because flyout was closed by click just {now - _lastHideTick}ms ago");
             return;
+        }
 
-        if (Visibility == Visibility.Visible && !_isClosing)
-        {
-            HideFlyout();
-        }
-        else
-        {
-            ShowFlyout(cursorX, cursorY);
-        }
+        ShowFlyout(cursorX, cursorY);
     }
 
     protected override void OnStateChanged(EventArgs e)
@@ -390,18 +406,18 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (Environment.TickCount64 - _dialogClosedTick < 600)
+        if (Environment.TickCount64 - _dialogClosedTick < 300)
         {
             return;
         }
 
-        if (Environment.TickCount64 - _contextMenuClosedTick < 600)
+        if (Environment.TickCount64 - _contextMenuClosedTick < 300)
         {
             return;
         }
 
-        // Ignore spurious deactivation events during launch/entrance handoff
-        if (diff < 800)
+        // Ignore sub-80ms microsecond OS activation handoff jitter
+        if (diff < 80)
         {
             return;
         }
