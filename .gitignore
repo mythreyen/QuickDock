@@ -1,0 +1,17 @@
+# Build results
+bin/
+obj/
+
+# Visual Studio / VS Code
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Temporary logs & debug outputs
+debug.txt
+err.log
+err.txt
+out.log
+out.txt
+scratch/
