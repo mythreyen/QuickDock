@@ -358,12 +358,12 @@ public static class DwmHelper
     }
 
     /// <summary>
-    /// Calculates the optimal DIP position for the flyout window:
-    /// Precisely aligned and centered directly above the QuickDock taskbar icon.
+    /// Calculates the optimal physical screen pixel position for the flyout window,
+    /// centered above/beside the QuickDock taskbar icon and strictly clamped within a single monitor's work area.
     /// </summary>
-    public static System.Windows.Point CalculateFlyoutPosition(
-        double windowWidth,
-        double windowHeight,
+    public static POINT CalculateFlyoutPhysicalPosition(
+        double windowWidthDip,
+        double windowHeightDip,
         double? preferredCursorX,
         double? preferredCursorY,
         out double dpiScaleX,
@@ -419,74 +419,92 @@ public static class DwmHelper
         if (hMonitor == IntPtr.Zero || !GetMonitorInfo(hMonitor, ref mi))
         {
             var wa = SystemParameters.WorkArea;
-            double x = (wa.Left + wa.Right - windowWidth) / 2.0;
-            double y = wa.Bottom - windowHeight - 8.0;
-            return new System.Windows.Point(x, y);
+            int fx = (int)Math.Round((wa.Left + wa.Right - windowWidthDip) / 2.0);
+            int fy = (int)Math.Round(wa.Bottom - windowHeightDip - 8.0);
+            return new POINT { X = fx, Y = fy };
         }
 
-        // Convert physical bounds to DIPs
-        double workLeft = mi.rcWork.Left / dpiScaleX;
-        double workRight = mi.rcWork.Right / dpiScaleX;
-        double workTop = mi.rcWork.Top / dpiScaleY;
-        double workBottom = mi.rcWork.Bottom / dpiScaleY;
-        double monitorLeft = mi.rcMonitor.Left / dpiScaleX;
-        double monitorRight = mi.rcMonitor.Right / dpiScaleX;
-        double monitorTop = mi.rcMonitor.Top / dpiScaleY;
+        // Perform all bounds & clamping in physical pixels so mixed-DPI monitors never misalign or straddle
+        double physWidth = windowWidthDip * dpiScaleX;
+        double physHeight = windowHeightDip * dpiScaleY;
+        double marginX = 8.0 * dpiScaleX;
+        double marginY = 8.0 * dpiScaleY;
+
+        double workLeft = mi.rcWork.Left;
+        double workRight = mi.rcWork.Right;
+        double workTop = mi.rcWork.Top;
+        double workBottom = mi.rcWork.Bottom;
+        double monitorLeft = mi.rcMonitor.Left;
+        double monitorRight = mi.rcMonitor.Right;
+        double monitorTop = mi.rcMonitor.Top;
 
         double targetLeft;
         if (workLeft > monitorLeft + 1.0)
         {
             // Taskbar is docked on the left screen edge
-            targetLeft = workLeft + 8.0;
+            targetLeft = workLeft + marginX;
         }
         else if (workRight < monitorRight - 1.0)
         {
             // Taskbar is docked on the right screen edge
-            targetLeft = workRight - windowWidth - 8.0;
+            targetLeft = workRight - physWidth - marginX;
         }
         else
         {
             // Centered directly above the click / icon position
-            double centerXDip = physicalX / dpiScaleX;
-            targetLeft = centerXDip - (windowWidth / 2.0);
+            targetLeft = physicalX - (physWidth / 2.0);
         }
 
-        // Clamp horizontally within monitor working area with an 8px margin
-        if (targetLeft < workLeft + 8.0)
-            targetLeft = workLeft + 8.0;
-        if (targetLeft + windowWidth > workRight - 8.0)
-            targetLeft = workRight - 8.0 - windowWidth;
+        // Clamp horizontally within the single monitor's working area
+        if (targetLeft < workLeft + marginX)
+            targetLeft = workLeft + marginX;
+        if (targetLeft + physWidth > workRight - marginX)
+            targetLeft = workRight - marginX - physWidth;
 
-        // Vertically: float 8px above bottom taskbar, or 8px below top taskbar
+        // Vertically: float 8 DIPs above bottom taskbar, or 8 DIPs below top taskbar
         double targetTop;
         if (btnRect.HasValue)
         {
             if (workTop > monitorTop + 1.0)
             {
-                targetTop = (btnRect.Value.Bottom / dpiScaleY) + 8.0;
+                targetTop = btnRect.Value.Bottom + marginY;
             }
             else
             {
-                targetTop = (btnRect.Value.Top / dpiScaleY) - windowHeight - 8.0;
+                targetTop = btnRect.Value.Top - physHeight - marginY;
             }
         }
         else if (workTop > monitorTop + 1.0)
         {
-            targetTop = workTop + 8.0;
+            targetTop = workTop + marginY;
         }
         else
         {
-            targetTop = workBottom - windowHeight - 8.0;
+            targetTop = workBottom - physHeight - marginY;
         }
 
-        // Clamp vertically within monitor working area with an 8px margin
-        if (targetTop < workTop + 8.0)
-            targetTop = workTop + 8.0;
-        if (targetTop + windowHeight > workBottom - 8.0)
-            targetTop = workBottom - 8.0 - windowHeight;
+        // Clamp vertically within the single monitor's working area
+        if (targetTop < workTop + marginY)
+            targetTop = workTop + marginY;
+        if (targetTop + physHeight > workBottom - marginY)
+            targetTop = workBottom - marginY - physHeight;
 
-        Log($"CalculateFlyoutPosition: Final DIP Pos=({targetLeft}, {targetTop}) for cursor=({physicalX},{physicalY}), DpiScale=({dpiScaleX},{dpiScaleY})");
-        return new System.Windows.Point(targetLeft, targetTop);
+        int finalX = (int)Math.Round(targetLeft);
+        int finalY = (int)Math.Round(targetTop);
+        Log($"CalculateFlyoutPosition: Final Phys Pos=({finalX}, {finalY}) for cursor=({physicalX},{physicalY}), DpiScale=({dpiScaleX},{dpiScaleY})");
+        return new POINT { X = finalX, Y = finalY };
+    }
+
+    public static System.Windows.Point CalculateFlyoutPosition(
+        double windowWidth,
+        double windowHeight,
+        double? preferredCursorX,
+        double? preferredCursorY,
+        out double dpiScaleX,
+        out double dpiScaleY)
+    {
+        var phys = CalculateFlyoutPhysicalPosition(windowWidth, windowHeight, preferredCursorX, preferredCursorY, out dpiScaleX, out dpiScaleY);
+        return new System.Windows.Point(phys.X / dpiScaleX, phys.Y / dpiScaleY);
     }
 
     public static System.Windows.Point CalculateFlyoutPosition(double windowWidth, double windowHeight, double? preferredCursorX = null, double? preferredCursorY = null)

@@ -434,22 +434,28 @@ public partial class MainWindow : Window
         }
     }
 
+    protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
+    {
+        base.OnDpiChanged(oldDpi, newDpi);
+        if (!_isClosing && Visibility == Visibility.Visible)
+        {
+            RepositionWindow();
+        }
+    }
+
     private void RepositionWindow()
     {
         double width = ActualWidth > 0 ? ActualWidth : Width;
         double height = (ActualHeight >= 100) ? ActualHeight : _cachedFlyoutHeight;
 
-        var pos = DwmHelper.CalculateFlyoutPosition(width, height, _activeCursorX, _activeCursorY, out double dpiScaleX, out double dpiScaleY);
-        DwmHelper.Log($"RepositionWindow: W={width}, H={height}, Pos=({pos.X},{pos.Y}), Dpi=({dpiScaleX},{dpiScaleY})");
-        Left = pos.X;
-        Top = pos.Y;
+        var physPos = DwmHelper.CalculateFlyoutPhysicalPosition(width, height, _activeCursorX, _activeCursorY, out double dpiScaleX, out double dpiScaleY);
+        DwmHelper.Log($"RepositionWindow: W={width}, H={height}, PhysPos=({physPos.X},{physPos.Y}), Dpi=({dpiScaleX},{dpiScaleY})");
 
         var helper = new WindowInteropHelper(this);
-        if (helper.Handle != IntPtr.Zero)
+        IntPtr hwnd = helper.EnsureHandle();
+        if (hwnd != IntPtr.Zero)
         {
-            int physX = (int)Math.Round(pos.X * dpiScaleX);
-            int physY = (int)Math.Round(pos.Y * dpiScaleY);
-            DwmHelper.SetWindowPos(helper.Handle, IntPtr.Zero, physX, physY, 0, 0, DwmHelper.SWP_NOSIZE | DwmHelper.SWP_NOZORDER | DwmHelper.SWP_NOACTIVATE);
+            DwmHelper.SetWindowPos(hwnd, IntPtr.Zero, physPos.X, physPos.Y, 0, 0, DwmHelper.SWP_NOSIZE | DwmHelper.SWP_NOZORDER | DwmHelper.SWP_NOACTIVATE);
         }
     }
 
