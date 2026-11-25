@@ -157,16 +157,74 @@ public static class DwmHelper
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool BringWindowToTop(IntPtr hWnd);
 
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr ProcessId);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, [MarshalAs(UnmanagedType.Bool)] bool fAttach);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
     [DllImport("shell32.dll", SetLastError = true)]
     public static extern int SetCurrentProcessExplicitAppUserModelID([MarshalAs(UnmanagedType.LPWStr)] string AppID);
 
     private static readonly object _logLock = new();
 
+    [DllImport("user32.dll")]
+    private static extern IntPtr LoadCursor(IntPtr hInstance, int lpCursorName);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SetCursor(IntPtr hCursor);
+
+    public const int IDC_ARROW = 32512;
+
+    /// <summary>
+    /// Restores the standard Windows arrow cursor.
+    /// </summary>
+    public static void RestoreStandardCursor()
+    {
+        try
+        {
+            IntPtr arrow = LoadCursor(IntPtr.Zero, IDC_ARROW);
+            if (arrow != IntPtr.Zero)
+            {
+                SetCursor(arrow);
+            }
+        }
+        catch {}
+    }
+
     public static void ForceForeground(IntPtr hwnd)
     {
         if (hwnd == IntPtr.Zero) return;
-        BringWindowToTop(hwnd);
-        SetForegroundWindow(hwnd);
+
+        IntPtr foregroundHwnd = GetForegroundWindow();
+        uint foregroundThreadId = GetWindowThreadProcessId(foregroundHwnd, IntPtr.Zero);
+        uint currentThreadId = GetCurrentThreadId();
+
+        if (foregroundThreadId != 0 && foregroundThreadId != currentThreadId)
+        {
+            AttachThreadInput(currentThreadId, foregroundThreadId, true);
+            BringWindowToTop(hwnd);
+            ShowWindow(hwnd, 5); // SW_SHOW
+            SetForegroundWindow(hwnd);
+            AttachThreadInput(currentThreadId, foregroundThreadId, false);
+        }
+        else
+        {
+            BringWindowToTop(hwnd);
+            ShowWindow(hwnd, 5);
+            SetForegroundWindow(hwnd);
+        }
     }
 
     public static void Log(string msg)

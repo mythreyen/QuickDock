@@ -25,6 +25,8 @@ public partial class MainWindow : Window
     private long _lastHideTick = 0;
     private long _dialogClosedTick = 0;
     private long _contextMenuClosedTick = 0;
+    private long _openingGeneration = 0;
+    private bool? _lastAppliedDarkMode;
     private double? _activeCursorX;
     private double? _activeCursorY;
     private double _cachedFlyoutHeight = 380;
@@ -61,7 +63,12 @@ public partial class MainWindow : Window
         {
             var folders = await FolderConfigService.GetConfiguredFoldersAsync(forceReload: force);
             DwmHelper.Log($"LoadFoldersAsync returned {folders?.Count ?? -1} items");
-            
+
+            if (!force && IsSameFolderList(FoldersList.ItemsSource as IReadOnlyList<QuickAccessItem>, folders))
+            {
+                return;
+            }
+
             FoldersList.ItemsSource = null;
             FoldersList.ItemsSource = folders;
 
@@ -89,6 +96,10 @@ public partial class MainWindow : Window
     /// </summary>
     public void ApplyTheme(bool isDark)
     {
+        if (_lastAppliedDarkMode == isDark)
+            return;
+        _lastAppliedDarkMode = isDark;
+
         var helper = new WindowInteropHelper(this);
         if (helper.Handle != IntPtr.Zero)
         {
@@ -133,6 +144,32 @@ public partial class MainWindow : Window
         return brush;
     }
 
+    private static bool IsSameFolderList(IReadOnlyList<QuickAccessItem>? a, IReadOnlyList<QuickAccessItem>? b)
+    {
+        if (ReferenceEquals(a, b)) return true;
+        if (a == null || b == null || a.Count != b.Count) return false;
+        for (int i = 0; i < a.Count; i++)
+        {
+            if (!string.Equals(a[i].Path, b[i].Path, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(a[i].Name, b[i].Name, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static DoubleAnimationUsingKeyFrames CreateFluentAnimation(double to, int durationMs, KeySpline spline)
+    {
+        var anim = new DoubleAnimationUsingKeyFrames();
+        anim.KeyFrames.Add(new SplineDoubleKeyFrame(to, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(durationMs)), spline));
+        Timeline.SetDesiredFrameRate(anim, 120);
+        return anim;
+    }
+
+    private static readonly KeySpline FluentEnterSpline = new(0.05, 0.9, 0.1, 1.0);
+    private static readonly KeySpline FluentExitSpline = new(0.5, 0.0, 0.9, 0.6);
+
     /// <summary>
     /// Switches to the Settings / Configure view.
     /// </summary>
@@ -143,11 +180,10 @@ public partial class MainWindow : Window
         SettingsHeader.Visibility = Visibility.Visible;
         SettingsPanel.Visibility = Visibility.Visible;
 
-        var fadeIn = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(160))
-        {
-            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
-        };
-        SettingsPanel.BeginAnimation(UIElement.OpacityProperty, fadeIn);
+        SettingsPanel.Opacity = 0;
+        SettingsTranslate.X = 14;
+        SettingsPanel.BeginAnimation(UIElement.OpacityProperty, CreateFluentAnimation(1.0, 200, FluentEnterSpline), HandoffBehavior.SnapshotAndReplace);
+        SettingsTranslate.BeginAnimation(TranslateTransform.XProperty, CreateFluentAnimation(0.0, 220, FluentEnterSpline), HandoffBehavior.SnapshotAndReplace);
 
         _ = LoadFoldersAsync(force: false);
         RepositionWindow();
@@ -163,11 +199,10 @@ public partial class MainWindow : Window
         FavoritesHeader.Visibility = Visibility.Visible;
         FavoritesPanel.Visibility = Visibility.Visible;
 
-        var fadeIn = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(160))
-        {
-            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
-        };
-        FavoritesPanel.BeginAnimation(UIElement.OpacityProperty, fadeIn);
+        FavoritesPanel.Opacity = 0;
+        FavoritesTranslate.X = -14;
+        FavoritesPanel.BeginAnimation(UIElement.OpacityProperty, CreateFluentAnimation(1.0, 200, FluentEnterSpline), HandoffBehavior.SnapshotAndReplace);
+        FavoritesTranslate.BeginAnimation(TranslateTransform.XProperty, CreateFluentAnimation(0.0, 220, FluentEnterSpline), HandoffBehavior.SnapshotAndReplace);
 
         RepositionWindow();
     }
@@ -193,7 +228,11 @@ public partial class MainWindow : Window
 
         _isClosing = false;
         _isOpening = true;
+        long openGen = ++_openingGeneration;
         _lastShowTick = Environment.TickCount64;
+
+        DwmHelper.RestoreStandardCursor();
+        System.Windows.Input.Mouse.OverrideCursor = null;
 
         ApplyTheme(DwmHelper.IsDarkModeEnabled());
 
@@ -205,17 +244,21 @@ public partial class MainWindow : Window
         // Reposition to the exact location of the taskbar icon before animation
         RepositionWindow();
 
-        RootBorder.BeginAnimation(UIElement.OpacityProperty, null);
-        RootTranslate.BeginAnimation(TranslateTransform.YProperty, null);
-        RootScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
-        RootScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+        bool wasVisible = Visibility == Visibility.Visible;
+        if (!wasVisible)
+        {
+            RootBorder.BeginAnimation(UIElement.OpacityProperty, null);
+            RootTranslate.BeginAnimation(TranslateTransform.YProperty, null);
+            RootScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+            RootScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
 
-        RootBorder.Opacity = 0;
-        RootTranslate.Y = 16;
-        RootScale.ScaleX = 0.96;
-        RootScale.ScaleY = 0.96;
+            RootBorder.Opacity = 0.2;
+            RootTranslate.Y = 80;
+            RootScale.ScaleX = 1.0;
+            RootScale.ScaleY = 0.92;
 
-        Show();
+            Show();
+        }
 
         var helper = new WindowInteropHelper(this);
         if (helper.Handle != IntPtr.Zero)
@@ -227,21 +270,28 @@ public partial class MainWindow : Window
         Activate();
         Focus();
 
-        var ease = new CircleEase { EasingMode = EasingMode.EaseOut };
-        var fadeIn = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(220)) { EasingFunction = ease };
-        var slideUp = new DoubleAnimation(16, 0, TimeSpan.FromMilliseconds(240)) { EasingFunction = ease };
-        var scaleX = new DoubleAnimation(0.96, 1.0, TimeSpan.FromMilliseconds(240)) { EasingFunction = ease };
-        var scaleY = new DoubleAnimation(0.96, 1.0, TimeSpan.FromMilliseconds(240)) { EasingFunction = ease };
-
-        RootBorder.BeginAnimation(UIElement.OpacityProperty, fadeIn);
-        RootTranslate.BeginAnimation(TranslateTransform.YProperty, slideUp);
-        RootScale.BeginAnimation(ScaleTransform.ScaleXProperty, scaleX);
-        RootScale.BeginAnimation(ScaleTransform.ScaleYProperty, scaleY);
+        RootBorder.BeginAnimation(UIElement.OpacityProperty, CreateFluentAnimation(1.0, 140, FluentEnterSpline), HandoffBehavior.SnapshotAndReplace);
+        RootTranslate.BeginAnimation(TranslateTransform.YProperty, CreateFluentAnimation(0.0, 280, FluentEnterSpline), HandoffBehavior.SnapshotAndReplace);
+        RootScale.BeginAnimation(ScaleTransform.ScaleXProperty, CreateFluentAnimation(1.0, 280, FluentEnterSpline), HandoffBehavior.SnapshotAndReplace);
+        RootScale.BeginAnimation(ScaleTransform.ScaleYProperty, CreateFluentAnimation(1.0, 280, FluentEnterSpline), HandoffBehavior.SnapshotAndReplace);
 
         _ = LoadFoldersAsync(force: false);
 
-        await Task.Delay(240);
-        _isOpening = false;
+        try
+        {
+            await Task.Delay(280);
+        }
+        finally
+        {
+            if (_openingGeneration == openGen)
+            {
+                _isOpening = false;
+            }
+        }
+
+        // If flyout was dismissed or superseded by a newer ShowFlyout while opening, do not reposition or interfere
+        if (_openingGeneration != openGen || Visibility != Visibility.Visible || _isClosing)
+            return;
 
         // Ensure window position perfectly reflects final rendered content height
         RepositionWindow();
@@ -268,46 +318,53 @@ public partial class MainWindow : Window
         _isClosing = true;
         _isOpening = false;
         _lastHideTick = Environment.TickCount64;
+        bool didHide = false;
 
-        var ease = new CubicEase { EasingMode = EasingMode.EaseIn };
-        var fadeOut = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(130)) { EasingFunction = ease };
-        var slideDown = new DoubleAnimation(0, 10, TimeSpan.FromMilliseconds(130)) { EasingFunction = ease };
-        var scaleX = new DoubleAnimation(1.0, 0.97, TimeSpan.FromMilliseconds(130)) { EasingFunction = ease };
-        var scaleY = new DoubleAnimation(1.0, 0.97, TimeSpan.FromMilliseconds(130)) { EasingFunction = ease };
+        try
+        {
+            RootBorder.BeginAnimation(UIElement.OpacityProperty, CreateFluentAnimation(0.0, 160, FluentExitSpline), HandoffBehavior.SnapshotAndReplace);
+            RootTranslate.BeginAnimation(TranslateTransform.YProperty, CreateFluentAnimation(64.0, 180, FluentExitSpline), HandoffBehavior.SnapshotAndReplace);
+            RootScale.BeginAnimation(ScaleTransform.ScaleXProperty, CreateFluentAnimation(1.0, 180, FluentExitSpline), HandoffBehavior.SnapshotAndReplace);
+            RootScale.BeginAnimation(ScaleTransform.ScaleYProperty, CreateFluentAnimation(0.92, 180, FluentExitSpline), HandoffBehavior.SnapshotAndReplace);
 
-        RootBorder.BeginAnimation(UIElement.OpacityProperty, fadeOut);
-        RootTranslate.BeginAnimation(TranslateTransform.YProperty, slideDown);
-        RootScale.BeginAnimation(ScaleTransform.ScaleXProperty, scaleX);
-        RootScale.BeginAnimation(ScaleTransform.ScaleYProperty, scaleY);
+            await Task.Delay(185);
 
-        await Task.Delay(135);
+            // If ShowFlyout was invoked while animating out, abort hiding
+            if (!_isClosing || _isOpening)
+                return;
 
-        // If ShowFlyout was invoked while animating out, abort hiding
-        if (!_isClosing || _isOpening)
-            return;
+            Hide();
+            didHide = true;
 
-        Hide();
+            // Reset to Favorites view for next time
+            SettingsHeader.Visibility = Visibility.Collapsed;
+            SettingsPanel.Visibility = Visibility.Collapsed;
+            FavoritesHeader.Visibility = Visibility.Visible;
+            FavoritesPanel.Visibility = Visibility.Visible;
 
-        // Reset to Favorites view for next time
-        SettingsHeader.Visibility = Visibility.Collapsed;
-        SettingsPanel.Visibility = Visibility.Collapsed;
-        FavoritesHeader.Visibility = Visibility.Visible;
-        FavoritesPanel.Visibility = Visibility.Visible;
+            RootBorder.BeginAnimation(UIElement.OpacityProperty, null);
+            RootTranslate.BeginAnimation(TranslateTransform.YProperty, null);
+            RootScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+            RootScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
 
-        RootBorder.BeginAnimation(UIElement.OpacityProperty, null);
-        RootTranslate.BeginAnimation(TranslateTransform.YProperty, null);
-        RootScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
-        RootScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
-
-        RootBorder.Opacity = 1;
-        RootTranslate.Y = 0;
-        RootScale.ScaleX = 1;
-        RootScale.ScaleY = 1;
-
-        _activeCursorX = null;
-        _activeCursorY = null;
-        _isClosing = false;
-        DwmHelper.Log("HideFlyout completed: Window hidden");
+            RootBorder.Opacity = 1;
+            RootTranslate.Y = 0;
+            RootScale.ScaleX = 1;
+            RootScale.ScaleY = 1;
+        }
+        finally
+        {
+            if (!_isOpening)
+            {
+                _isClosing = false;
+            }
+            if (didHide)
+            {
+                _activeCursorX = null;
+                _activeCursorY = null;
+                DwmHelper.Log("HideFlyout completed: Window hidden");
+            }
+        }
     }
 
     /// <summary>
@@ -315,24 +372,38 @@ public partial class MainWindow : Window
     /// </summary>
     public void ToggleFlyout(double? cursorX = null, double? cursorY = null)
     {
+        DwmHelper.RestoreStandardCursor();
+        System.Windows.Input.Mouse.OverrideCursor = null;
         long now = Environment.TickCount64;
-        DwmHelper.Log($"ToggleFlyout entry: now - show = {now - _lastShowTick}, now - hide = {now - _lastHideTick}, Visibility={Visibility}, Cursor=({cursorX},{cursorY})");
+        DwmHelper.Log($"ToggleFlyout entry: now - show = {now - _lastShowTick}, now - hide = {now - _lastHideTick}, Visibility={Visibility}, isClosing={_isClosing}, isOpening={_isOpening}, Cursor=({cursorX},{cursorY})");
 
-        // Protect against rapid accidental double clicks when summoned via taskbar icon
-        if (now - _lastShowTick < 650)
+        // Protect against rapid hardware switch bounce (< 100ms)
+        if (now - _lastShowTick < 100 || now - _lastHideTick < 100)
+        {
+            DwmHelper.Log("ToggleFlyout: debounced hardware bounce (< 100ms)");
             return;
+        }
 
+        // If the flyout is currently visible or actively animating out, the toggle action collapses it
+        if (Visibility == Visibility.Visible || _isClosing)
+        {
+            if (!_isClosing)
+            {
+                HideFlyout();
+            }
+            return;
+        }
+
+        // If the window recently closed due to losing focus (e.g. user clicked the taskbar button
+        // while the window was open, which fired Deactivated just before this TOGGLE command arrived),
+        // do not reopen it—the user's click was meant to collapse the open flyout.
         if (now - _lastHideTick < 350)
+        {
+            DwmHelper.Log($"ToggleFlyout: suppressed reopen because flyout was closed by click just {now - _lastHideTick}ms ago");
             return;
+        }
 
-        if (Visibility == Visibility.Visible && !_isClosing)
-        {
-            HideFlyout();
-        }
-        else
-        {
-            ShowFlyout(cursorX, cursorY);
-        }
+        ShowFlyout(cursorX, cursorY);
     }
 
     protected override void OnStateChanged(EventArgs e)
@@ -390,18 +461,18 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (Environment.TickCount64 - _dialogClosedTick < 600)
+        if (Environment.TickCount64 - _dialogClosedTick < 300)
         {
             return;
         }
 
-        if (Environment.TickCount64 - _contextMenuClosedTick < 600)
+        if (Environment.TickCount64 - _contextMenuClosedTick < 300)
         {
             return;
         }
 
-        // Ignore spurious deactivation events during launch/entrance handoff
-        if (diff < 800)
+        // Ignore sub-80ms microsecond OS activation handoff jitter
+        if (diff < 80)
         {
             return;
         }
@@ -465,11 +536,12 @@ public partial class MainWindow : Window
     private async void RefreshButton_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
         e.Handled = true;
-        var rotateAnim = new DoubleAnimation(0, 360, TimeSpan.FromMilliseconds(450))
+        var rotateAnim = new DoubleAnimation(0, 360, TimeSpan.FromMilliseconds(500))
         {
-            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            EasingFunction = new QuarticEase { EasingMode = EasingMode.EaseOut }
         };
-        RefreshIconRotate.BeginAnimation(RotateTransform.AngleProperty, rotateAnim);
+        Timeline.SetDesiredFrameRate(rotateAnim, 120);
+        RefreshIconRotate.BeginAnimation(RotateTransform.AngleProperty, rotateAnim, HandoffBehavior.SnapshotAndReplace);
         await LoadFoldersAsync(force: true);
     }
 
@@ -560,8 +632,15 @@ public partial class MainWindow : Window
     private async void ResetDefaults_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
         e.Handled = true;
-        await FolderConfigService.ResetToQuickAccessDefaultsAsync();
-        await LoadFoldersAsync(force: true);
+        try
+        {
+            await FolderConfigService.ResetToQuickAccessDefaultsAsync();
+            await LoadFoldersAsync(force: true);
+        }
+        catch (Exception ex)
+        {
+            DwmHelper.Log($"ResetDefaults error: {ex.Message}");
+        }
     }
 
     private void FolderRow_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
@@ -633,25 +712,40 @@ public partial class MainWindow : Window
 
     private static void OpenFolder(string path)
     {
-        try
+        _ = Task.Run(() =>
         {
-            if (!Directory.Exists(path))
+            try
             {
-                DwmHelper.Log($"OpenFolder: folder does not exist: {path}");
-                return;
-            }
+                if (!Directory.Exists(path))
+                {
+                    DwmHelper.Log($"OpenFolder: folder does not exist: {path}");
+                    return;
+                }
 
-            Process.Start(new ProcessStartInfo
+                // Direct ShellExecuteEx on the folder path avoids spawning a redundant explorer.exe process
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = path,
+                    UseShellExecute = true
+                });
+            }
+            catch
             {
-                FileName = "explorer.exe",
-                Arguments = $"\"{path}\"",
-                UseShellExecute = true
-            });
-        }
-        catch (Exception ex)
-        {
-            DwmHelper.Log($"Failed to open folder '{path}': {ex.Message}");
-        }
+                try
+                {
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "explorer.exe",
+                        Arguments = $"\"{path}\"",
+                        UseShellExecute = true
+                    });
+                }
+                catch (Exception ex)
+                {
+                    DwmHelper.Log($"Failed to open folder '{path}': {ex.Message}");
+                }
+            }
+        });
     }
 
     private static void OpenTerminal(string path)

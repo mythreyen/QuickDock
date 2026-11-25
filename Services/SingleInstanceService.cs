@@ -69,7 +69,7 @@ public sealed class SingleInstanceService : IDisposable
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Failed to send command '{command}' (attempt {attempt + 1}): {ex.Message}");
+                DwmHelper.Log($"Failed to send command '{command}' (attempt {attempt + 1}): {ex.Message}");
                 if (attempt == 0)
                 {
                     Thread.Sleep(100);
@@ -124,7 +124,7 @@ public sealed class SingleInstanceService : IDisposable
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"IPC Server connection error: {ex.Message}");
+                DwmHelper.Log($"IPC Server connection error: {ex.Message}");
                 try
                 {
                     await Task.Delay(200, token);
