@@ -91,7 +91,7 @@ public partial class App : Application
 
             _singleInstanceService.Dispose();
             _singleInstanceService = null;
-            DwmHelper.DismissStartupFeedback();
+            DwmHelper.RestoreStandardCursor();
             Environment.Exit(0);
             return;
         }
@@ -113,7 +113,7 @@ public partial class App : Application
                 if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
                     return;
 
-                Dispatcher.Invoke(() =>
+                Dispatcher.BeginInvoke(new Action(() =>
                 {
                     try
                     {
@@ -148,7 +148,7 @@ public partial class App : Application
                     {
                         DwmHelper.Log($"Error handling IPC command: {ex.Message}");
                     }
-                });
+                }));
             }
             catch (Exception ex)
             {

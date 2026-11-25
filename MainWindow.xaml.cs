@@ -195,7 +195,7 @@ public partial class MainWindow : Window
         _isOpening = true;
         _lastShowTick = Environment.TickCount64;
 
-        DwmHelper.DismissStartupFeedback();
+        DwmHelper.RestoreStandardCursor();
         System.Windows.Input.Mouse.OverrideCursor = null;
 
         ApplyTheme(DwmHelper.IsDarkModeEnabled());
@@ -243,8 +243,14 @@ public partial class MainWindow : Window
 
         _ = LoadFoldersAsync(force: false);
 
-        await Task.Delay(240);
-        _isOpening = false;
+        try
+        {
+            await Task.Delay(240);
+        }
+        finally
+        {
+            _isOpening = false;
+        }
 
         // If flyout was dismissed while opening animation was running, do not reposition or interfere
         if (Visibility != Visibility.Visible || _isClosing)
@@ -276,45 +282,50 @@ public partial class MainWindow : Window
         _isOpening = false;
         _lastHideTick = Environment.TickCount64;
 
-        var ease = new CubicEase { EasingMode = EasingMode.EaseIn };
-        var fadeOut = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(130)) { EasingFunction = ease };
-        var slideDown = new DoubleAnimation(0, 10, TimeSpan.FromMilliseconds(130)) { EasingFunction = ease };
-        var scaleX = new DoubleAnimation(1.0, 0.97, TimeSpan.FromMilliseconds(130)) { EasingFunction = ease };
-        var scaleY = new DoubleAnimation(1.0, 0.97, TimeSpan.FromMilliseconds(130)) { EasingFunction = ease };
+        try
+        {
+            var ease = new CubicEase { EasingMode = EasingMode.EaseIn };
+            var fadeOut = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(130)) { EasingFunction = ease };
+            var slideDown = new DoubleAnimation(0, 10, TimeSpan.FromMilliseconds(130)) { EasingFunction = ease };
+            var scaleX = new DoubleAnimation(1.0, 0.97, TimeSpan.FromMilliseconds(130)) { EasingFunction = ease };
+            var scaleY = new DoubleAnimation(1.0, 0.97, TimeSpan.FromMilliseconds(130)) { EasingFunction = ease };
 
-        RootBorder.BeginAnimation(UIElement.OpacityProperty, fadeOut);
-        RootTranslate.BeginAnimation(TranslateTransform.YProperty, slideDown);
-        RootScale.BeginAnimation(ScaleTransform.ScaleXProperty, scaleX);
-        RootScale.BeginAnimation(ScaleTransform.ScaleYProperty, scaleY);
+            RootBorder.BeginAnimation(UIElement.OpacityProperty, fadeOut);
+            RootTranslate.BeginAnimation(TranslateTransform.YProperty, slideDown);
+            RootScale.BeginAnimation(ScaleTransform.ScaleXProperty, scaleX);
+            RootScale.BeginAnimation(ScaleTransform.ScaleYProperty, scaleY);
 
-        await Task.Delay(135);
+            await Task.Delay(135);
 
-        // If ShowFlyout was invoked while animating out, abort hiding
-        if (!_isClosing || _isOpening)
-            return;
+            // If ShowFlyout was invoked while animating out, abort hiding
+            if (!_isClosing || _isOpening)
+                return;
 
-        Hide();
+            Hide();
 
-        // Reset to Favorites view for next time
-        SettingsHeader.Visibility = Visibility.Collapsed;
-        SettingsPanel.Visibility = Visibility.Collapsed;
-        FavoritesHeader.Visibility = Visibility.Visible;
-        FavoritesPanel.Visibility = Visibility.Visible;
+            // Reset to Favorites view for next time
+            SettingsHeader.Visibility = Visibility.Collapsed;
+            SettingsPanel.Visibility = Visibility.Collapsed;
+            FavoritesHeader.Visibility = Visibility.Visible;
+            FavoritesPanel.Visibility = Visibility.Visible;
 
-        RootBorder.BeginAnimation(UIElement.OpacityProperty, null);
-        RootTranslate.BeginAnimation(TranslateTransform.YProperty, null);
-        RootScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
-        RootScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+            RootBorder.BeginAnimation(UIElement.OpacityProperty, null);
+            RootTranslate.BeginAnimation(TranslateTransform.YProperty, null);
+            RootScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+            RootScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
 
-        RootBorder.Opacity = 1;
-        RootTranslate.Y = 0;
-        RootScale.ScaleX = 1;
-        RootScale.ScaleY = 1;
-
-        _activeCursorX = null;
-        _activeCursorY = null;
-        _isClosing = false;
-        DwmHelper.Log("HideFlyout completed: Window hidden");
+            RootBorder.Opacity = 1;
+            RootTranslate.Y = 0;
+            RootScale.ScaleX = 1;
+            RootScale.ScaleY = 1;
+        }
+        finally
+        {
+            _activeCursorX = null;
+            _activeCursorY = null;
+            _isClosing = false;
+            DwmHelper.Log("HideFlyout completed: Window hidden");
+        }
     }
 
     /// <summary>
@@ -322,7 +333,7 @@ public partial class MainWindow : Window
     /// </summary>
     public void ToggleFlyout(double? cursorX = null, double? cursorY = null)
     {
-        DwmHelper.DismissStartupFeedback();
+        DwmHelper.RestoreStandardCursor();
         System.Windows.Input.Mouse.OverrideCursor = null;
         long now = Environment.TickCount64;
         DwmHelper.Log($"ToggleFlyout entry: now - show = {now - _lastShowTick}, now - hide = {now - _lastHideTick}, Visibility={Visibility}, isClosing={_isClosing}, isOpening={_isOpening}, Cursor=({cursorX},{cursorY})");
