@@ -244,6 +244,8 @@ public partial class MainWindow : Window
         // Reposition to the exact location of the taskbar icon before animation
         RepositionWindow();
 
+        double flyoutHeight = (ActualHeight >= 100) ? ActualHeight : _cachedFlyoutHeight;
+
         bool wasVisible = Visibility == Visibility.Visible;
         if (!wasVisible)
         {
@@ -252,10 +254,10 @@ public partial class MainWindow : Window
             RootScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
             RootScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
 
-            RootBorder.Opacity = 0.2;
-            RootTranslate.Y = 80;
+            RootBorder.Opacity = 0.85;
+            RootTranslate.Y = flyoutHeight;
             RootScale.ScaleX = 1.0;
-            RootScale.ScaleY = 0.92;
+            RootScale.ScaleY = 1.0;
 
             Show();
         }
@@ -270,16 +272,16 @@ public partial class MainWindow : Window
         Activate();
         Focus();
 
-        RootBorder.BeginAnimation(UIElement.OpacityProperty, CreateFluentAnimation(1.0, 140, FluentEnterSpline), HandoffBehavior.SnapshotAndReplace);
-        RootTranslate.BeginAnimation(TranslateTransform.YProperty, CreateFluentAnimation(0.0, 280, FluentEnterSpline), HandoffBehavior.SnapshotAndReplace);
-        RootScale.BeginAnimation(ScaleTransform.ScaleXProperty, CreateFluentAnimation(1.0, 280, FluentEnterSpline), HandoffBehavior.SnapshotAndReplace);
-        RootScale.BeginAnimation(ScaleTransform.ScaleYProperty, CreateFluentAnimation(1.0, 280, FluentEnterSpline), HandoffBehavior.SnapshotAndReplace);
+        RootBorder.BeginAnimation(UIElement.OpacityProperty, CreateFluentAnimation(1.0, 90, FluentEnterSpline), HandoffBehavior.SnapshotAndReplace);
+        RootTranslate.BeginAnimation(TranslateTransform.YProperty, CreateFluentAnimation(0.0, 260, FluentEnterSpline), HandoffBehavior.SnapshotAndReplace);
+        RootScale.BeginAnimation(ScaleTransform.ScaleXProperty, CreateFluentAnimation(1.0, 260, FluentEnterSpline), HandoffBehavior.SnapshotAndReplace);
+        RootScale.BeginAnimation(ScaleTransform.ScaleYProperty, CreateFluentAnimation(1.0, 260, FluentEnterSpline), HandoffBehavior.SnapshotAndReplace);
 
         _ = LoadFoldersAsync(force: false);
 
         try
         {
-            await Task.Delay(280);
+            await Task.Delay(260);
         }
         finally
         {
@@ -322,10 +324,12 @@ public partial class MainWindow : Window
 
         try
         {
-            RootBorder.BeginAnimation(UIElement.OpacityProperty, CreateFluentAnimation(0.0, 160, FluentExitSpline), HandoffBehavior.SnapshotAndReplace);
-            RootTranslate.BeginAnimation(TranslateTransform.YProperty, CreateFluentAnimation(64.0, 180, FluentExitSpline), HandoffBehavior.SnapshotAndReplace);
+            double flyoutHeight = (ActualHeight >= 100) ? ActualHeight : _cachedFlyoutHeight;
+
+            RootBorder.BeginAnimation(UIElement.OpacityProperty, CreateFluentAnimation(0.2, 175, FluentExitSpline), HandoffBehavior.SnapshotAndReplace);
+            RootTranslate.BeginAnimation(TranslateTransform.YProperty, CreateFluentAnimation(flyoutHeight, 180, FluentExitSpline), HandoffBehavior.SnapshotAndReplace);
             RootScale.BeginAnimation(ScaleTransform.ScaleXProperty, CreateFluentAnimation(1.0, 180, FluentExitSpline), HandoffBehavior.SnapshotAndReplace);
-            RootScale.BeginAnimation(ScaleTransform.ScaleYProperty, CreateFluentAnimation(0.92, 180, FluentExitSpline), HandoffBehavior.SnapshotAndReplace);
+            RootScale.BeginAnimation(ScaleTransform.ScaleYProperty, CreateFluentAnimation(1.0, 180, FluentExitSpline), HandoffBehavior.SnapshotAndReplace);
 
             await Task.Delay(185);
 
