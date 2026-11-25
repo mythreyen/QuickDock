@@ -113,7 +113,7 @@ public partial class App : Application
                 if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
                     return;
 
-                Dispatcher.BeginInvoke(new Action(() =>
+                Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Send, new Action(() =>
                 {
                     try
                     {

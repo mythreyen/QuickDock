@@ -184,6 +184,8 @@
         </Style>
     </Window.Resources>
 
+    <!-- Clip container so the flyout cleanly rolls out from under the taskbar edge -->
+    <Grid ClipToBounds="True">
     <!-- Outer Window Border with 1px delicate inner border & Transient Acrylic background -->
     <Border x:Name="RootBorder"
             CornerRadius="10"
@@ -409,6 +411,9 @@
                 <!-- 1. FAVORITES VIEW                          -->
                 <!-- ========================================== -->
                 <Grid x:Name="FavoritesPanel" Visibility="Visible">
+                    <Grid.RenderTransform>
+                        <TranslateTransform x:Name="FavoritesTranslate" X="0"/>
+                    </Grid.RenderTransform>
                     <!-- Empty State -->
                     <StackPanel x:Name="EmptyStateText"
                                 Orientation="Vertical"
@@ -539,29 +544,45 @@
                                         <Trigger SourceName="RowBorder" Property="IsMouseOver" Value="True">
                                             <Trigger.EnterActions>
                                                 <BeginStoryboard>
-                                                    <Storyboard>
+                                                    <Storyboard Timeline.DesiredFrameRate="120">
                                                         <DoubleAnimation Storyboard.TargetName="HoverPill"
                                                                          Storyboard.TargetProperty="Opacity"
                                                                          To="1.0"
-                                                                         Duration="0:0:0.120"/>
+                                                                         Duration="0:0:0.140">
+                                                            <DoubleAnimation.EasingFunction>
+                                                                <CubicEase EasingMode="EaseOut"/>
+                                                            </DoubleAnimation.EasingFunction>
+                                                        </DoubleAnimation>
                                                         <DoubleAnimation Storyboard.TargetName="TerminalButton"
                                                                          Storyboard.TargetProperty="Opacity"
                                                                          To="0.7"
-                                                                         Duration="0:0:0.120"/>
+                                                                         Duration="0:0:0.140">
+                                                            <DoubleAnimation.EasingFunction>
+                                                                <CubicEase EasingMode="EaseOut"/>
+                                                            </DoubleAnimation.EasingFunction>
+                                                        </DoubleAnimation>
                                                     </Storyboard>
                                                 </BeginStoryboard>
                                             </Trigger.EnterActions>
                                             <Trigger.ExitActions>
                                                 <BeginStoryboard>
-                                                    <Storyboard>
+                                                    <Storyboard Timeline.DesiredFrameRate="120">
                                                         <DoubleAnimation Storyboard.TargetName="HoverPill"
                                                                          Storyboard.TargetProperty="Opacity"
                                                                          To="0.0"
-                                                                         Duration="0:0:0.120"/>
+                                                                         Duration="0:0:0.160">
+                                                            <DoubleAnimation.EasingFunction>
+                                                                <CubicEase EasingMode="EaseOut"/>
+                                                            </DoubleAnimation.EasingFunction>
+                                                        </DoubleAnimation>
                                                         <DoubleAnimation Storyboard.TargetName="TerminalButton"
                                                                          Storyboard.TargetProperty="Opacity"
                                                                          To="0.0"
-                                                                         Duration="0:0:0.120"/>
+                                                                         Duration="0:0:0.160">
+                                                            <DoubleAnimation.EasingFunction>
+                                                                <CubicEase EasingMode="EaseOut"/>
+                                                            </DoubleAnimation.EasingFunction>
+                                                        </DoubleAnimation>
                                                     </Storyboard>
                                                 </BeginStoryboard>
                                             </Trigger.ExitActions>
@@ -570,21 +591,29 @@
                                         <Trigger SourceName="TerminalButton" Property="IsMouseOver" Value="True">
                                             <Trigger.EnterActions>
                                                 <BeginStoryboard>
-                                                    <Storyboard>
+                                                    <Storyboard Timeline.DesiredFrameRate="120">
                                                         <DoubleAnimation Storyboard.TargetName="TerminalButton"
                                                                          Storyboard.TargetProperty="Opacity"
                                                                          To="1.0"
-                                                                         Duration="0:0:0.080"/>
+                                                                         Duration="0:0:0.100">
+                                                            <DoubleAnimation.EasingFunction>
+                                                                <CubicEase EasingMode="EaseOut"/>
+                                                            </DoubleAnimation.EasingFunction>
+                                                        </DoubleAnimation>
                                                     </Storyboard>
                                                 </BeginStoryboard>
                                             </Trigger.EnterActions>
                                             <Trigger.ExitActions>
                                                 <BeginStoryboard>
-                                                    <Storyboard>
+                                                    <Storyboard Timeline.DesiredFrameRate="120">
                                                         <DoubleAnimation Storyboard.TargetName="TerminalButton"
                                                                          Storyboard.TargetProperty="Opacity"
                                                                          To="0.7"
-                                                                         Duration="0:0:0.080"/>
+                                                                         Duration="0:0:0.100">
+                                                            <DoubleAnimation.EasingFunction>
+                                                                <CubicEase EasingMode="EaseOut"/>
+                                                            </DoubleAnimation.EasingFunction>
+                                                        </DoubleAnimation>
                                                     </Storyboard>
                                                 </BeginStoryboard>
                                             </Trigger.ExitActions>
@@ -601,6 +630,9 @@
                 <!-- 2. SETTINGS VIEW (CONFIGURE DOCK)          -->
                 <!-- ========================================== -->
                 <Grid x:Name="SettingsPanel" Visibility="Collapsed">
+                    <Grid.RenderTransform>
+                        <TranslateTransform x:Name="SettingsTranslate" X="0"/>
+                    </Grid.RenderTransform>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
@@ -793,7 +825,34 @@
                                     </Border>
                                     <DataTemplate.Triggers>
                                         <Trigger SourceName="SettingsRowBorder" Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="SettingsHoverPill" Property="Opacity" Value="1"/>
+                                            <Trigger.EnterActions>
+                                                <BeginStoryboard>
+                                                    <Storyboard Timeline.DesiredFrameRate="120">
+                                                        <DoubleAnimation Storyboard.TargetName="SettingsHoverPill"
+                                                                         Storyboard.TargetProperty="Opacity"
+                                                                         To="1.0"
+                                                                         Duration="0:0:0.140">
+                                                            <DoubleAnimation.EasingFunction>
+                                                                <CubicEase EasingMode="EaseOut"/>
+                                                            </DoubleAnimation.EasingFunction>
+                                                        </DoubleAnimation>
+                                                    </Storyboard>
+                                                </BeginStoryboard>
+                                            </Trigger.EnterActions>
+                                            <Trigger.ExitActions>
+                                                <BeginStoryboard>
+                                                    <Storyboard Timeline.DesiredFrameRate="120">
+                                                        <DoubleAnimation Storyboard.TargetName="SettingsHoverPill"
+                                                                         Storyboard.TargetProperty="Opacity"
+                                                                         To="0.0"
+                                                                         Duration="0:0:0.160">
+                                                            <DoubleAnimation.EasingFunction>
+                                                                <CubicEase EasingMode="EaseOut"/>
+                                                            </DoubleAnimation.EasingFunction>
+                                                        </DoubleAnimation>
+                                                    </Storyboard>
+                                                </BeginStoryboard>
+                                            </Trigger.ExitActions>
                                         </Trigger>
                                     </DataTemplate.Triggers>
                                 </DataTemplate>
@@ -842,4 +901,5 @@
             </Grid>
         </Grid>
     </Border>
+    </Grid>
 </Window>
