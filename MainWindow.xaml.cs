@@ -27,6 +27,7 @@ public partial class MainWindow : Window
     private long _contextMenuClosedTick = 0;
     private long _openingGeneration = 0;
     private bool? _lastAppliedDarkMode;
+    private Task? _pendingLoadTask;
     private double? _activeCursorX;
     private double? _activeCursorY;
     private double _cachedFlyoutHeight = 380;
@@ -57,7 +58,19 @@ public partial class MainWindow : Window
     /// <summary>
     /// Loads configured folders from storage asynchronously.
     /// </summary>
-    public async Task LoadFoldersAsync(bool force = false)
+    public Task LoadFoldersAsync(bool force = false)
+    {
+        if (!force && _pendingLoadTask != null && !_pendingLoadTask.IsCompleted)
+        {
+            return _pendingLoadTask;
+        }
+
+        var task = LoadFoldersInternalAsync(force);
+        _pendingLoadTask = task;
+        return task;
+    }
+
+    private async Task LoadFoldersInternalAsync(bool force)
     {
         try
         {
@@ -239,6 +252,13 @@ public partial class MainWindow : Window
         if (WindowState != WindowState.Normal)
         {
             WindowState = WindowState.Normal;
+        }
+
+        if (FoldersList.ItemsSource == null)
+        {
+            await LoadFoldersAsync(force: false);
+            if (_openingGeneration != openGen || _isClosing)
+                return;
         }
 
         // Preserve automatic height sizing before positioning and measuring at target monitor DPI
