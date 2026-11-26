@@ -358,6 +358,72 @@ public static class DwmHelper
     }
 
     /// <summary>
+    /// Computes a resolution- and aspect-ratio-aware maximum flyout height (in DIPs) for the monitor
+    /// under the target cursor position so taller/higher-res screens allow more items without clipping.
+    /// </summary>
+    public static double GetRecommendedMaxFlyoutHeightDip(double? preferredCursorX, double? preferredCursorY)
+    {
+        double physicalX;
+        double physicalY;
+
+        if (preferredCursorX.HasValue && preferredCursorY.HasValue &&
+            !double.IsNaN(preferredCursorX.Value) && !double.IsNaN(preferredCursorY.Value))
+        {
+            physicalX = preferredCursorX.Value;
+            physicalY = preferredCursorY.Value;
+        }
+        else
+        {
+            GetCursorPos(out POINT cursorPt);
+            physicalX = cursorPt.X;
+            physicalY = cursorPt.Y;
+        }
+
+        POINT pt = new POINT { X = (int)Math.Round(physicalX), Y = (int)Math.Round(physicalY) };
+        IntPtr hMonitor = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+
+        double dpiScaleX = 1.0;
+        double dpiScaleY = 1.0;
+
+        if (hMonitor != IntPtr.Zero)
+        {
+            try
+            {
+                if (GetDpiForMonitor(hMonitor, MDT_EFFECTIVE_DPI, out uint dpiX, out uint dpiY) == 0)
+                {
+                    dpiScaleX = dpiX / 96.0;
+                    dpiScaleY = dpiY / 96.0;
+                }
+            }
+            catch {}
+        }
+
+        double workWidthDip;
+        double workHeightDip;
+        if (hMonitor != IntPtr.Zero && GetMonitorInfo(hMonitor, ref mi))
+        {
+            workWidthDip = (mi.rcWork.Right - mi.rcWork.Left) / dpiScaleX;
+            workHeightDip = (mi.rcWork.Bottom - mi.rcWork.Top) / dpiScaleY;
+        }
+        else
+        {
+            var wa = SystemParameters.WorkArea;
+            workWidthDip = wa.Width;
+            workHeightDip = wa.Height;
+        }
+
+        if (workWidthDip <= 0 || workHeightDip <= 0)
+            return 560;
+
+        // Scale the height ratio slightly higher on taller aspect ratios (e.g. 16:10 / 3:2 laptop displays vs 16:9)
+        double aspectRatio = workHeightDip / workWidthDip;
+        double heightFraction = Math.Clamp(0.54 + Math.Max(0.0, aspectRatio - 0.5625) * 0.45, 0.54, 0.68);
+        double maxAllowed = Math.Max(260.0, workHeightDip - 32.0);
+        return Math.Round(Math.Clamp(workHeightDip * heightFraction, 360.0, Math.Min(720.0, maxAllowed)));
+    }
+
+    /// <summary>
     /// Calculates the optimal physical screen pixel position for the flyout window,
     /// centered above/beside the QuickDock taskbar icon and strictly clamped within a single monitor's work area.
     /// </summary>

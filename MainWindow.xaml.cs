@@ -445,17 +445,35 @@ public partial class MainWindow : Window
 
     private void RepositionWindow()
     {
+        double recommendedMaxHeight = DwmHelper.GetRecommendedMaxFlyoutHeightDip(_activeCursorX, _activeCursorY);
+        if (Math.Abs(MaxHeight - recommendedMaxHeight) > 1.0)
+        {
+            MaxHeight = recommendedMaxHeight;
+            SettingsScrollViewer.MaxHeight = Math.Max(220.0, recommendedMaxHeight - 120.0);
+            if (IsLoaded)
+            {
+                UpdateLayout();
+            }
+        }
+
         double width = ActualWidth > 0 ? ActualWidth : Width;
-        double height = (ActualHeight >= 100) ? ActualHeight : _cachedFlyoutHeight;
+        double height = (ActualHeight >= 100) ? ActualHeight : Math.Min(_cachedFlyoutHeight, MaxHeight);
 
         var physPos = DwmHelper.CalculateFlyoutPhysicalPosition(width, height, _activeCursorX, _activeCursorY, out double dpiScaleX, out double dpiScaleY);
-        DwmHelper.Log($"RepositionWindow: W={width}, H={height}, PhysPos=({physPos.X},{physPos.Y}), Dpi=({dpiScaleX},{dpiScaleY})");
+        int physW = (int)Math.Round(width * dpiScaleX);
+        int physH = (int)Math.Round(height * dpiScaleY);
+        DwmHelper.Log($"RepositionWindow: W={width}, H={height}, MaxH={MaxHeight}, PhysPos=({physPos.X},{physPos.Y}), PhysSize=({physW}x{physH}), Dpi=({dpiScaleX},{dpiScaleY})");
 
         var helper = new WindowInteropHelper(this);
         IntPtr hwnd = helper.EnsureHandle();
         if (hwnd != IntPtr.Zero)
         {
-            DwmHelper.SetWindowPos(hwnd, IntPtr.Zero, physPos.X, physPos.Y, 0, 0, DwmHelper.SWP_NOSIZE | DwmHelper.SWP_NOZORDER | DwmHelper.SWP_NOACTIVATE);
+            uint flags = DwmHelper.SWP_NOZORDER | DwmHelper.SWP_NOACTIVATE;
+            if (physW <= 0 || physH <= 0)
+            {
+                flags |= DwmHelper.SWP_NOSIZE;
+            }
+            DwmHelper.SetWindowPos(hwnd, IntPtr.Zero, physPos.X, physPos.Y, physW, physH, flags);
         }
     }
 
