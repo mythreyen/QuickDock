@@ -241,10 +241,11 @@ public partial class MainWindow : Window
             WindowState = WindowState.Normal;
         }
 
-        // Reposition to the exact location of the taskbar icon before animation
-        RepositionWindow();
+        // Preserve automatic height sizing before positioning and measuring at target monitor DPI
+        SizeToContent = SizeToContent.Height;
 
-        double flyoutHeight = (ActualHeight >= 100) ? ActualHeight : _cachedFlyoutHeight;
+        // Position the window on the target monitor before showing so it inherits the target monitor's DPI
+        RepositionWindow();
 
         bool wasVisible = Visibility == Visibility.Visible;
         if (!wasVisible)
@@ -254,12 +255,22 @@ public partial class MainWindow : Window
             RootScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
             RootScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
 
+            RootBorder.Opacity = 0;
+            Show();
+        }
+
+        // Re-measure and re-position at the target monitor's actual DPI before starting the fly-out animation
+        InvalidateMeasure();
+        UpdateLayout();
+        RepositionWindow();
+
+        double flyoutHeight = (ActualHeight >= 100) ? ActualHeight : Math.Min(_cachedFlyoutHeight, MaxHeight);
+        if (!wasVisible)
+        {
             RootBorder.Opacity = 0.85;
             RootTranslate.Y = flyoutHeight;
             RootScale.ScaleX = 1.0;
             RootScale.ScaleY = 1.0;
-
-            Show();
         }
 
         var helper = new WindowInteropHelper(this);
@@ -437,9 +448,15 @@ public partial class MainWindow : Window
     protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
     {
         base.OnDpiChanged(oldDpi, newDpi);
-        if (!_isClosing && Visibility == Visibility.Visible)
+        if (!_isClosing)
         {
-            RepositionWindow();
+            SizeToContent = SizeToContent.Height;
+            InvalidateMeasure();
+            UpdateLayout();
+            if (Visibility == Visibility.Visible)
+            {
+                RepositionWindow();
+            }
         }
     }
 
@@ -452,6 +469,7 @@ public partial class MainWindow : Window
             SettingsScrollViewer.MaxHeight = Math.Max(220.0, recommendedMaxHeight - 120.0);
             if (IsLoaded)
             {
+                InvalidateMeasure();
                 UpdateLayout();
             }
         }
@@ -460,20 +478,19 @@ public partial class MainWindow : Window
         double height = (ActualHeight >= 100) ? ActualHeight : Math.Min(_cachedFlyoutHeight, MaxHeight);
 
         var physPos = DwmHelper.CalculateFlyoutPhysicalPosition(width, height, _activeCursorX, _activeCursorY, out double dpiScaleX, out double dpiScaleY);
-        int physW = (int)Math.Round(width * dpiScaleX);
-        int physH = (int)Math.Round(height * dpiScaleY);
-        DwmHelper.Log($"RepositionWindow: W={width}, H={height}, MaxH={MaxHeight}, PhysPos=({physPos.X},{physPos.Y}), PhysSize=({physW}x{physH}), Dpi=({dpiScaleX},{dpiScaleY})");
+        DwmHelper.Log($"RepositionWindow: W={width}, H={height}, MaxH={MaxHeight}, PhysPos=({physPos.X},{physPos.Y}), TargetDpi=({dpiScaleX},{dpiScaleY})");
+
+        // Keep WPF Left/Top synced using the window's current DPI so Show() never overrides SetWindowPos
+        var currentDpi = VisualTreeHelper.GetDpi(this);
+        Left = physPos.X / currentDpi.DpiScaleX;
+        Top = physPos.Y / currentDpi.DpiScaleY;
 
         var helper = new WindowInteropHelper(this);
         IntPtr hwnd = helper.EnsureHandle();
         if (hwnd != IntPtr.Zero)
         {
-            uint flags = DwmHelper.SWP_NOZORDER | DwmHelper.SWP_NOACTIVATE;
-            if (physW <= 0 || physH <= 0)
-            {
-                flags |= DwmHelper.SWP_NOSIZE;
-            }
-            DwmHelper.SetWindowPos(hwnd, IntPtr.Zero, physPos.X, physPos.Y, physW, physH, flags);
+            // Always keep SWP_NOSIZE so WPF SizeToContent="Height" and PerMonitorV2 DPI scaling manage size without clipping
+            DwmHelper.SetWindowPos(hwnd, IntPtr.Zero, physPos.X, physPos.Y, 0, 0, DwmHelper.SWP_NOSIZE | DwmHelper.SWP_NOZORDER | DwmHelper.SWP_NOACTIVATE);
         }
     }
 

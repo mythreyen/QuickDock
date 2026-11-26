@@ -440,12 +440,14 @@ public static class DwmHelper
 
         double physicalX;
         double physicalY;
+        bool hasExplicitCursor = preferredCursorX.HasValue && preferredCursorY.HasValue &&
+                                 !double.IsNaN(preferredCursorX.Value) && !double.IsNaN(preferredCursorY.Value) &&
+                                 !(preferredCursorX.Value == 0 && preferredCursorY.Value == 0);
 
-        if (preferredCursorX.HasValue && preferredCursorY.HasValue &&
-            !double.IsNaN(preferredCursorX.Value) && !double.IsNaN(preferredCursorY.Value))
+        if (hasExplicitCursor)
         {
-            physicalX = preferredCursorX.Value;
-            physicalY = preferredCursorY.Value;
+            physicalX = preferredCursorX!.Value;
+            physicalY = preferredCursorY!.Value;
             Log($"CalculateFlyoutPosition: Using preferred click cursor ({physicalX}, {physicalY})");
         }
         else
@@ -503,6 +505,18 @@ public static class DwmHelper
         double monitorLeft = mi.rcMonitor.Left;
         double monitorRight = mi.rcMonitor.Right;
         double monitorTop = mi.rcMonitor.Top;
+        double monitorBottom = mi.rcMonitor.Bottom;
+
+        // Check whether the click actually came from the taskbar band (including auto-hide edge).
+        // If not (e.g. (0,0) or launched from terminal/IDE/Start), center horizontally on the monitor.
+        double autoHideBand = 60.0 * dpiScaleY;
+        bool hasValidCursor = !(physicalX == 0 && physicalY == 0);
+        bool isClickOnTaskbar = hasValidCursor && (btnRect.HasValue ||
+            (physicalY >= workBottom && physicalY <= monitorBottom) ||
+            (physicalY >= monitorTop && physicalY < workTop) ||
+            (physicalX >= monitorLeft && physicalX < workLeft) ||
+            (physicalX >= workRight && physicalX <= monitorRight) ||
+            (Math.Abs(workBottom - monitorBottom) < 1.0 && physicalY >= monitorBottom - autoHideBand));
 
         double targetLeft;
         if (workLeft > monitorLeft + 1.0)
@@ -514,6 +528,11 @@ public static class DwmHelper
         {
             // Taskbar is docked on the right screen edge
             targetLeft = workRight - physWidth - marginX;
+        }
+        else if (!isClickOnTaskbar)
+        {
+            // Centered horizontally on the monitor when not invoked by clicking a taskbar button
+            targetLeft = workLeft + ((workRight - workLeft - physWidth) / 2.0);
         }
         else
         {
