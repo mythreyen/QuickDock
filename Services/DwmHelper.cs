@@ -313,6 +313,64 @@ public static class DwmHelper
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
     public static extern IntPtr FindWindow(string lpClassName, string? lpWindowName);
 
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+    private static extern IntPtr FindWindowEx(IntPtr hwndParent, IntPtr hwndChildAfter, string lpszClass, string? lpszWindow);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr WindowFromPoint(POINT Point);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetAncestor(IntPtr hwnd, uint gaFlags);
+
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    private static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
+
+    private const uint GA_ROOT = 2;
+
+    private static readonly object _taskbarCacheLock = new();
+    private static readonly System.Collections.Generic.Dictionary<IntPtr, (System.Windows.Rect Rect, long Tick)> _lastTaskbarButtonByMonitor = new();
+
+    private static bool IsTaskbarWindow(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return false;
+        IntPtr root = GetAncestor(hwnd, GA_ROOT);
+        if (root == IntPtr.Zero) root = hwnd;
+        var sb = new System.Text.StringBuilder(64);
+        if (GetClassName(root, sb, sb.Capacity) <= 0) return false;
+        string cls = sb.ToString();
+        return cls == "Shell_TrayWnd" || cls == "Shell_SecondaryTrayWnd";
+    }
+
+    private static void CacheTaskbarButton(IntPtr hMonitor, System.Windows.Rect rect)
+    {
+        if (hMonitor == IntPtr.Zero) return;
+        lock (_taskbarCacheLock)
+        {
+            _lastTaskbarButtonByMonitor[hMonitor] = (rect, Environment.TickCount64);
+        }
+    }
+
+    private static bool TryGetCachedTaskbarButton(IntPtr hMonitor, long maxAgeMs, out System.Windows.Rect rect)
+    {
+        rect = default;
+        if (hMonitor == IntPtr.Zero) return false;
+        lock (_taskbarCacheLock)
+        {
+            if (_lastTaskbarButtonByMonitor.TryGetValue(hMonitor, out var entry))
+            {
+                if (maxAgeMs < 0 || (Environment.TickCount64 - entry.Tick) <= maxAgeMs)
+                {
+                    rect = entry.Rect;
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     /// <summary>
     /// Attempts to find the exact taskbar button element under or near the specified physical screen point.
     /// Excludes elements owned by this application to avoid self-snapping.
@@ -321,6 +379,12 @@ public static class DwmHelper
     {
         try
         {
+            IntPtr hwndUnderPoint = WindowFromPoint(new POINT { X = (int)Math.Round(x), Y = (int)Math.Round(y) });
+            if (!IsTaskbarWindow(hwndUnderPoint))
+            {
+                return null;
+            }
+
             var el = AutomationElement.FromPoint(new System.Windows.Point(x, y));
             if (el != null)
             {
@@ -330,7 +394,7 @@ public static class DwmHelper
                 }
 
                 var r = el.Current.BoundingRectangle;
-                if (r.Width >= 16 && r.Height >= 16 && r.Width <= 250 && r.Height <= 120)
+                if (!r.IsEmpty && r.Width >= 16 && r.Height >= 16 && r.Width <= 250 && r.Height <= 120)
                 {
                     return new System.Windows.Rect(r.X, r.Y, r.Width, r.Height);
                 }
@@ -345,7 +409,7 @@ public static class DwmHelper
                     }
 
                     var pr = parent.Current.BoundingRectangle;
-                    if (pr.Width >= 16 && pr.Height >= 16 && pr.Width <= 250 && pr.Height <= 120)
+                    if (!pr.IsEmpty && pr.Width >= 16 && pr.Height >= 16 && pr.Width <= 250 && pr.Height <= 120)
                     {
                         return new System.Windows.Rect(pr.X, pr.Y, pr.Width, pr.Height);
                     }
@@ -358,12 +422,162 @@ public static class DwmHelper
     }
 
     /// <summary>
-    /// Calculates the optimal DIP position for the flyout window:
-    /// Precisely aligned and centered directly above the QuickDock taskbar icon.
+    /// Searches the Windows taskbar on the specified monitor for the QuickDock taskbar button.
+    /// Used when the cursor moved off the taskbar before GetCursorPos ran (e.g. cold start).
     /// </summary>
-    public static System.Windows.Point CalculateFlyoutPosition(
-        double windowWidth,
-        double windowHeight,
+    public static System.Windows.Rect? FindQuickDockTaskbarButton(IntPtr hMonitor)
+    {
+        if (hMonitor == IntPtr.Zero) return null;
+
+        // Reuse very recent lookup during multi-pass RepositionWindow calls in a single flyout open
+        if (TryGetCachedTaskbarButton(hMonitor, maxAgeMs: 500, out var recentRect))
+        {
+            return recentRect;
+        }
+
+        try
+        {
+            var trayWindows = new System.Collections.Generic.List<IntPtr>();
+            IntPtr primaryTray = FindWindow("Shell_TrayWnd", null);
+            if (primaryTray != IntPtr.Zero)
+                trayWindows.Add(primaryTray);
+
+            IntPtr secTray = IntPtr.Zero;
+            while ((secTray = FindWindowEx(IntPtr.Zero, secTray, "Shell_SecondaryTrayWnd", null)) != IntPtr.Zero)
+            {
+                trayWindows.Add(secTray);
+            }
+
+            var buttonCond = new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button);
+            System.Windows.Rect? nameFallback = null;
+
+            foreach (IntPtr trayHwnd in trayWindows)
+            {
+                if (MonitorFromWindow(trayHwnd, MONITOR_DEFAULTTONEAREST) != hMonitor)
+                    continue;
+
+                var trayEl = AutomationElement.FromHandle(trayHwnd);
+                if (trayEl == null) continue;
+
+                var buttons = trayEl.FindAll(TreeScope.Descendants, buttonCond);
+                for (int i = 0; i < buttons.Count; i++)
+                {
+                    var btn = buttons[i];
+                    try
+                    {
+                        if (btn.Current.ProcessId == Environment.ProcessId)
+                            continue;
+
+                        var r = btn.Current.BoundingRectangle;
+                        if (r.IsEmpty || r.Width < 16 || r.Height < 16 || r.Width > 250 || r.Height > 120)
+                            continue;
+
+                        string autoId = btn.Current.AutomationId ?? string.Empty;
+                        string name = btn.Current.Name ?? string.Empty;
+
+                        if (autoId.Contains("QuickDock.App", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var rect = new System.Windows.Rect(r.X, r.Y, r.Width, r.Height);
+                            CacheTaskbarButton(hMonitor, rect);
+                            return rect;
+                        }
+
+                        if (!nameFallback.HasValue &&
+                            (name.Equals("QuickDock", StringComparison.OrdinalIgnoreCase) ||
+                             name.StartsWith("QuickDock - ", StringComparison.OrdinalIgnoreCase) ||
+                             name.StartsWith("QuickDock (", StringComparison.OrdinalIgnoreCase)))
+                        {
+                            nameFallback = new System.Windows.Rect(r.X, r.Y, r.Width, r.Height);
+                        }
+                    }
+                    catch {}
+                }
+            }
+
+            if (nameFallback.HasValue)
+            {
+                CacheTaskbarButton(hMonitor, nameFallback.Value);
+                return nameFallback;
+            }
+        }
+        catch {}
+
+        return null;
+    }
+
+    /// <summary>
+    /// Computes a resolution- and aspect-ratio-aware maximum flyout height (in DIPs) for the monitor
+    /// under the target cursor position so taller/higher-res screens allow more items without clipping.
+    /// </summary>
+    public static double GetRecommendedMaxFlyoutHeightDip(double? preferredCursorX, double? preferredCursorY)
+    {
+        double physicalX;
+        double physicalY;
+
+        if (preferredCursorX.HasValue && preferredCursorY.HasValue &&
+            !double.IsNaN(preferredCursorX.Value) && !double.IsNaN(preferredCursorY.Value))
+        {
+            physicalX = preferredCursorX.Value;
+            physicalY = preferredCursorY.Value;
+        }
+        else
+        {
+            GetCursorPos(out POINT cursorPt);
+            physicalX = cursorPt.X;
+            physicalY = cursorPt.Y;
+        }
+
+        POINT pt = new POINT { X = (int)Math.Round(physicalX), Y = (int)Math.Round(physicalY) };
+        IntPtr hMonitor = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+
+        double dpiScaleX = 1.0;
+        double dpiScaleY = 1.0;
+
+        if (hMonitor != IntPtr.Zero)
+        {
+            try
+            {
+                if (GetDpiForMonitor(hMonitor, MDT_EFFECTIVE_DPI, out uint dpiX, out uint dpiY) == 0)
+                {
+                    dpiScaleX = dpiX / 96.0;
+                    dpiScaleY = dpiY / 96.0;
+                }
+            }
+            catch {}
+        }
+
+        double workWidthDip;
+        double workHeightDip;
+        if (hMonitor != IntPtr.Zero && GetMonitorInfo(hMonitor, ref mi))
+        {
+            workWidthDip = (mi.rcWork.Right - mi.rcWork.Left) / dpiScaleX;
+            workHeightDip = (mi.rcWork.Bottom - mi.rcWork.Top) / dpiScaleY;
+        }
+        else
+        {
+            var wa = SystemParameters.WorkArea;
+            workWidthDip = wa.Width;
+            workHeightDip = wa.Height;
+        }
+
+        if (workWidthDip <= 0 || workHeightDip <= 0)
+            return 560;
+
+        // Scale the height ratio slightly higher on taller aspect ratios (e.g. 16:10 / 3:2 laptop displays vs 16:9)
+        double aspectRatio = workHeightDip / workWidthDip;
+        double heightFraction = Math.Clamp(0.54 + Math.Max(0.0, aspectRatio - 0.5625) * 0.45, 0.54, 0.68);
+        double maxAllowed = Math.Max(260.0, workHeightDip - 32.0);
+        return Math.Round(Math.Clamp(workHeightDip * heightFraction, 360.0, Math.Min(720.0, maxAllowed)));
+    }
+
+    /// <summary>
+    /// Calculates the optimal physical screen pixel position for the flyout window,
+    /// centered above/beside the QuickDock taskbar icon and strictly clamped within a single monitor's work area.
+    /// </summary>
+    public static POINT CalculateFlyoutPhysicalPosition(
+        double windowWidthDip,
+        double windowHeightDip,
         double? preferredCursorX,
         double? preferredCursorY,
         out double dpiScaleX,
@@ -374,12 +588,14 @@ public static class DwmHelper
 
         double physicalX;
         double physicalY;
+        bool hasExplicitCursor = preferredCursorX.HasValue && preferredCursorY.HasValue &&
+                                 !double.IsNaN(preferredCursorX.Value) && !double.IsNaN(preferredCursorY.Value) &&
+                                 !(preferredCursorX.Value == 0 && preferredCursorY.Value == 0);
 
-        if (preferredCursorX.HasValue && preferredCursorY.HasValue &&
-            !double.IsNaN(preferredCursorX.Value) && !double.IsNaN(preferredCursorY.Value))
+        if (hasExplicitCursor)
         {
-            physicalX = preferredCursorX.Value;
-            physicalY = preferredCursorY.Value;
+            physicalX = preferredCursorX!.Value;
+            physicalY = preferredCursorY!.Value;
             Log($"CalculateFlyoutPosition: Using preferred click cursor ({physicalX}, {physicalY})");
         }
         else
@@ -390,18 +606,29 @@ public static class DwmHelper
             Log($"CalculateFlyoutPosition: Using live cursor ({physicalX}, {physicalY})");
         }
 
-        // Try to snap to the exact taskbar button under or near that click point
+        POINT pt = new POINT { X = (int)Math.Round(physicalX), Y = (int)Math.Round(physicalY) };
+        IntPtr hMonitor = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+
+        // Try to snap to the exact taskbar button under the cursor, or locate QuickDock's taskbar button on this monitor
         var btnRect = GetTaskbarButtonNear(physicalX, physicalY);
         if (btnRect.HasValue)
         {
+            CacheTaskbarButton(hMonitor, btnRect.Value);
             physicalX = btnRect.Value.Left + (btnRect.Value.Width / 2.0);
             physicalY = btnRect.Value.Top;
             Log($"CalculateFlyoutPosition: Snapped to button bounds at ({physicalX}, {physicalY})");
         }
-
-        POINT pt = new POINT { X = (int)Math.Round(physicalX), Y = (int)Math.Round(physicalY) };
-        IntPtr hMonitor = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
-        MONITORINFO mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+        else
+        {
+            btnRect = FindQuickDockTaskbarButton(hMonitor);
+            if (btnRect.HasValue)
+            {
+                physicalX = btnRect.Value.Left + (btnRect.Value.Width / 2.0);
+                physicalY = btnRect.Value.Top;
+                Log($"CalculateFlyoutPosition: Located QuickDock taskbar button at ({physicalX}, {physicalY})");
+            }
+        }
 
         if (hMonitor != IntPtr.Zero)
         {
@@ -419,74 +646,118 @@ public static class DwmHelper
         if (hMonitor == IntPtr.Zero || !GetMonitorInfo(hMonitor, ref mi))
         {
             var wa = SystemParameters.WorkArea;
-            double x = (wa.Left + wa.Right - windowWidth) / 2.0;
-            double y = wa.Bottom - windowHeight - 8.0;
-            return new System.Windows.Point(x, y);
+            int fx = (int)Math.Round((wa.Left + wa.Right - windowWidthDip) / 2.0);
+            int fy = (int)Math.Round(wa.Bottom - windowHeightDip - 8.0);
+            return new POINT { X = fx, Y = fy };
         }
 
-        // Convert physical bounds to DIPs
-        double workLeft = mi.rcWork.Left / dpiScaleX;
-        double workRight = mi.rcWork.Right / dpiScaleX;
-        double workTop = mi.rcWork.Top / dpiScaleY;
-        double workBottom = mi.rcWork.Bottom / dpiScaleY;
-        double monitorLeft = mi.rcMonitor.Left / dpiScaleX;
-        double monitorRight = mi.rcMonitor.Right / dpiScaleX;
-        double monitorTop = mi.rcMonitor.Top / dpiScaleY;
+        // Perform all bounds & clamping in physical pixels so mixed-DPI monitors never misalign or straddle
+        double physWidth = windowWidthDip * dpiScaleX;
+        double physHeight = windowHeightDip * dpiScaleY;
+        double marginX = 8.0 * dpiScaleX;
+        double marginY = 8.0 * dpiScaleY;
+
+        double workLeft = mi.rcWork.Left;
+        double workRight = mi.rcWork.Right;
+        double workTop = mi.rcWork.Top;
+        double workBottom = mi.rcWork.Bottom;
+        double monitorLeft = mi.rcMonitor.Left;
+        double monitorRight = mi.rcMonitor.Right;
+        double monitorTop = mi.rcMonitor.Top;
+        double monitorBottom = mi.rcMonitor.Bottom;
+
+        // Check whether the click actually came from the taskbar band (including auto-hide edge).
+        // If not (e.g. cursor moved off taskbar before startup completed), fall back to cached button bounds if available.
+        double autoHideBand = 60.0 * dpiScaleY;
+        bool hasValidCursor = !(physicalX == 0 && physicalY == 0);
+        bool isClickOnTaskbar = hasValidCursor && (btnRect.HasValue ||
+            (physicalY >= workBottom && physicalY <= monitorBottom) ||
+            (physicalY >= monitorTop && physicalY < workTop) ||
+            (physicalX >= monitorLeft && physicalX < workLeft) ||
+            (physicalX >= workRight && physicalX <= monitorRight) ||
+            (Math.Abs(workBottom - monitorBottom) < 1.0 && physicalY >= monitorBottom - autoHideBand));
+
+        if (!btnRect.HasValue && !isClickOnTaskbar && TryGetCachedTaskbarButton(hMonitor, maxAgeMs: -1, out var cachedBtnRect))
+        {
+            btnRect = cachedBtnRect;
+            physicalX = cachedBtnRect.Left + (cachedBtnRect.Width / 2.0);
+            physicalY = cachedBtnRect.Top;
+            isClickOnTaskbar = true;
+            Log($"CalculateFlyoutPosition: Fallback to cached taskbar button at ({physicalX}, {physicalY})");
+        }
 
         double targetLeft;
         if (workLeft > monitorLeft + 1.0)
         {
             // Taskbar is docked on the left screen edge
-            targetLeft = workLeft + 8.0;
+            targetLeft = workLeft + marginX;
         }
         else if (workRight < monitorRight - 1.0)
         {
             // Taskbar is docked on the right screen edge
-            targetLeft = workRight - windowWidth - 8.0;
+            targetLeft = workRight - physWidth - marginX;
+        }
+        else if (!isClickOnTaskbar)
+        {
+            // Centered horizontally on the monitor when not invoked by clicking a taskbar button
+            targetLeft = workLeft + ((workRight - workLeft - physWidth) / 2.0);
         }
         else
         {
             // Centered directly above the click / icon position
-            double centerXDip = physicalX / dpiScaleX;
-            targetLeft = centerXDip - (windowWidth / 2.0);
+            targetLeft = physicalX - (physWidth / 2.0);
         }
 
-        // Clamp horizontally within monitor working area with an 8px margin
-        if (targetLeft < workLeft + 8.0)
-            targetLeft = workLeft + 8.0;
-        if (targetLeft + windowWidth > workRight - 8.0)
-            targetLeft = workRight - 8.0 - windowWidth;
+        // Clamp horizontally within the single monitor's working area
+        if (targetLeft < workLeft + marginX)
+            targetLeft = workLeft + marginX;
+        if (targetLeft + physWidth > workRight - marginX)
+            targetLeft = workRight - marginX - physWidth;
 
-        // Vertically: float 8px above bottom taskbar, or 8px below top taskbar
+        // Vertically: float 8 DIPs above bottom taskbar, or 8 DIPs below top taskbar
         double targetTop;
         if (btnRect.HasValue)
         {
             if (workTop > monitorTop + 1.0)
             {
-                targetTop = (btnRect.Value.Bottom / dpiScaleY) + 8.0;
+                targetTop = btnRect.Value.Bottom + marginY;
             }
             else
             {
-                targetTop = (btnRect.Value.Top / dpiScaleY) - windowHeight - 8.0;
+                targetTop = btnRect.Value.Top - physHeight - marginY;
             }
         }
         else if (workTop > monitorTop + 1.0)
         {
-            targetTop = workTop + 8.0;
+            targetTop = workTop + marginY;
         }
         else
         {
-            targetTop = workBottom - windowHeight - 8.0;
+            targetTop = workBottom - physHeight - marginY;
         }
 
-        // Clamp vertically within monitor working area with an 8px margin
-        if (targetTop < workTop + 8.0)
-            targetTop = workTop + 8.0;
-        if (targetTop + windowHeight > workBottom - 8.0)
-            targetTop = workBottom - 8.0 - windowHeight;
+        // Clamp vertically within the single monitor's working area
+        if (targetTop < workTop + marginY)
+            targetTop = workTop + marginY;
+        if (targetTop + physHeight > workBottom - marginY)
+            targetTop = workBottom - marginY - physHeight;
 
-        Log($"CalculateFlyoutPosition: Final DIP Pos=({targetLeft}, {targetTop}) for cursor=({physicalX},{physicalY}), DpiScale=({dpiScaleX},{dpiScaleY})");
-        return new System.Windows.Point(targetLeft, targetTop);
+        int finalX = (int)Math.Round(targetLeft);
+        int finalY = (int)Math.Round(targetTop);
+        Log($"CalculateFlyoutPosition: Final Phys Pos=({finalX}, {finalY}) for cursor=({physicalX},{physicalY}), DpiScale=({dpiScaleX},{dpiScaleY})");
+        return new POINT { X = finalX, Y = finalY };
+    }
+
+    public static System.Windows.Point CalculateFlyoutPosition(
+        double windowWidth,
+        double windowHeight,
+        double? preferredCursorX,
+        double? preferredCursorY,
+        out double dpiScaleX,
+        out double dpiScaleY)
+    {
+        var phys = CalculateFlyoutPhysicalPosition(windowWidth, windowHeight, preferredCursorX, preferredCursorY, out dpiScaleX, out dpiScaleY);
+        return new System.Windows.Point(phys.X / dpiScaleX, phys.Y / dpiScaleY);
     }
 
     public static System.Windows.Point CalculateFlyoutPosition(double windowWidth, double windowHeight, double? preferredCursorX = null, double? preferredCursorY = null)

@@ -27,6 +27,7 @@ public partial class MainWindow : Window
     private long _contextMenuClosedTick = 0;
     private long _openingGeneration = 0;
     private bool? _lastAppliedDarkMode;
+    private Task? _pendingLoadTask;
     private double? _activeCursorX;
     private double? _activeCursorY;
     private double _cachedFlyoutHeight = 380;
@@ -57,7 +58,19 @@ public partial class MainWindow : Window
     /// <summary>
     /// Loads configured folders from storage asynchronously.
     /// </summary>
-    public async Task LoadFoldersAsync(bool force = false)
+    public Task LoadFoldersAsync(bool force = false)
+    {
+        if (!force && _pendingLoadTask != null && !_pendingLoadTask.IsCompleted)
+        {
+            return _pendingLoadTask;
+        }
+
+        var task = LoadFoldersInternalAsync(force);
+        _pendingLoadTask = task;
+        return task;
+    }
+
+    private async Task LoadFoldersInternalAsync(bool force)
     {
         try
         {
@@ -241,7 +254,17 @@ public partial class MainWindow : Window
             WindowState = WindowState.Normal;
         }
 
-        // Reposition to the exact location of the taskbar icon before animation
+        if (FoldersList.ItemsSource == null)
+        {
+            await LoadFoldersAsync(force: false);
+            if (_openingGeneration != openGen || _isClosing)
+                return;
+        }
+
+        // Preserve automatic height sizing before positioning and measuring at target monitor DPI
+        SizeToContent = SizeToContent.Height;
+
+        // Position the window on the target monitor before showing so it inherits the target monitor's DPI
         RepositionWindow();
 
         bool wasVisible = Visibility == Visibility.Visible;
@@ -252,12 +275,22 @@ public partial class MainWindow : Window
             RootScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
             RootScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
 
-            RootBorder.Opacity = 0.2;
-            RootTranslate.Y = 80;
-            RootScale.ScaleX = 1.0;
-            RootScale.ScaleY = 0.92;
-
+            RootBorder.Opacity = 0;
             Show();
+        }
+
+        // Re-measure and re-position at the target monitor's actual DPI before starting the fly-out animation
+        InvalidateMeasure();
+        UpdateLayout();
+        RepositionWindow();
+
+        double flyoutHeight = (ActualHeight >= 100) ? ActualHeight : Math.Min(_cachedFlyoutHeight, MaxHeight);
+        if (!wasVisible)
+        {
+            RootBorder.Opacity = 0.85;
+            RootTranslate.Y = flyoutHeight;
+            RootScale.ScaleX = 1.0;
+            RootScale.ScaleY = 1.0;
         }
 
         var helper = new WindowInteropHelper(this);
@@ -270,16 +303,16 @@ public partial class MainWindow : Window
         Activate();
         Focus();
 
-        RootBorder.BeginAnimation(UIElement.OpacityProperty, CreateFluentAnimation(1.0, 140, FluentEnterSpline), HandoffBehavior.SnapshotAndReplace);
-        RootTranslate.BeginAnimation(TranslateTransform.YProperty, CreateFluentAnimation(0.0, 280, FluentEnterSpline), HandoffBehavior.SnapshotAndReplace);
-        RootScale.BeginAnimation(ScaleTransform.ScaleXProperty, CreateFluentAnimation(1.0, 280, FluentEnterSpline), HandoffBehavior.SnapshotAndReplace);
-        RootScale.BeginAnimation(ScaleTransform.ScaleYProperty, CreateFluentAnimation(1.0, 280, FluentEnterSpline), HandoffBehavior.SnapshotAndReplace);
+        RootBorder.BeginAnimation(UIElement.OpacityProperty, CreateFluentAnimation(1.0, 90, FluentEnterSpline), HandoffBehavior.SnapshotAndReplace);
+        RootTranslate.BeginAnimation(TranslateTransform.YProperty, CreateFluentAnimation(0.0, 260, FluentEnterSpline), HandoffBehavior.SnapshotAndReplace);
+        RootScale.BeginAnimation(ScaleTransform.ScaleXProperty, CreateFluentAnimation(1.0, 260, FluentEnterSpline), HandoffBehavior.SnapshotAndReplace);
+        RootScale.BeginAnimation(ScaleTransform.ScaleYProperty, CreateFluentAnimation(1.0, 260, FluentEnterSpline), HandoffBehavior.SnapshotAndReplace);
 
         _ = LoadFoldersAsync(force: false);
 
         try
         {
-            await Task.Delay(280);
+            await Task.Delay(260);
         }
         finally
         {
@@ -322,10 +355,12 @@ public partial class MainWindow : Window
 
         try
         {
-            RootBorder.BeginAnimation(UIElement.OpacityProperty, CreateFluentAnimation(0.0, 160, FluentExitSpline), HandoffBehavior.SnapshotAndReplace);
-            RootTranslate.BeginAnimation(TranslateTransform.YProperty, CreateFluentAnimation(64.0, 180, FluentExitSpline), HandoffBehavior.SnapshotAndReplace);
+            double flyoutHeight = (ActualHeight >= 100) ? ActualHeight : _cachedFlyoutHeight;
+
+            RootBorder.BeginAnimation(UIElement.OpacityProperty, CreateFluentAnimation(0.2, 175, FluentExitSpline), HandoffBehavior.SnapshotAndReplace);
+            RootTranslate.BeginAnimation(TranslateTransform.YProperty, CreateFluentAnimation(flyoutHeight, 180, FluentExitSpline), HandoffBehavior.SnapshotAndReplace);
             RootScale.BeginAnimation(ScaleTransform.ScaleXProperty, CreateFluentAnimation(1.0, 180, FluentExitSpline), HandoffBehavior.SnapshotAndReplace);
-            RootScale.BeginAnimation(ScaleTransform.ScaleYProperty, CreateFluentAnimation(0.92, 180, FluentExitSpline), HandoffBehavior.SnapshotAndReplace);
+            RootScale.BeginAnimation(ScaleTransform.ScaleYProperty, CreateFluentAnimation(1.0, 180, FluentExitSpline), HandoffBehavior.SnapshotAndReplace);
 
             await Task.Delay(185);
 
@@ -430,22 +465,52 @@ public partial class MainWindow : Window
         }
     }
 
+    protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
+    {
+        base.OnDpiChanged(oldDpi, newDpi);
+        if (!_isClosing)
+        {
+            SizeToContent = SizeToContent.Height;
+            InvalidateMeasure();
+            UpdateLayout();
+            if (Visibility == Visibility.Visible)
+            {
+                RepositionWindow();
+            }
+        }
+    }
+
     private void RepositionWindow()
     {
-        double width = ActualWidth > 0 ? ActualWidth : Width;
-        double height = (ActualHeight >= 100) ? ActualHeight : _cachedFlyoutHeight;
+        double recommendedMaxHeight = DwmHelper.GetRecommendedMaxFlyoutHeightDip(_activeCursorX, _activeCursorY);
+        if (Math.Abs(MaxHeight - recommendedMaxHeight) > 1.0)
+        {
+            MaxHeight = recommendedMaxHeight;
+            SettingsScrollViewer.MaxHeight = Math.Max(220.0, recommendedMaxHeight - 120.0);
+            if (IsLoaded)
+            {
+                InvalidateMeasure();
+                UpdateLayout();
+            }
+        }
 
-        var pos = DwmHelper.CalculateFlyoutPosition(width, height, _activeCursorX, _activeCursorY, out double dpiScaleX, out double dpiScaleY);
-        DwmHelper.Log($"RepositionWindow: W={width}, H={height}, Pos=({pos.X},{pos.Y}), Dpi=({dpiScaleX},{dpiScaleY})");
-        Left = pos.X;
-        Top = pos.Y;
+        double width = ActualWidth > 0 ? ActualWidth : Width;
+        double height = (ActualHeight >= 100) ? ActualHeight : Math.Min(_cachedFlyoutHeight, MaxHeight);
+
+        var physPos = DwmHelper.CalculateFlyoutPhysicalPosition(width, height, _activeCursorX, _activeCursorY, out double dpiScaleX, out double dpiScaleY);
+        DwmHelper.Log($"RepositionWindow: W={width}, H={height}, MaxH={MaxHeight}, PhysPos=({physPos.X},{physPos.Y}), TargetDpi=({dpiScaleX},{dpiScaleY})");
+
+        // Keep WPF Left/Top synced using the window's current DPI so Show() never overrides SetWindowPos
+        var currentDpi = VisualTreeHelper.GetDpi(this);
+        Left = physPos.X / currentDpi.DpiScaleX;
+        Top = physPos.Y / currentDpi.DpiScaleY;
 
         var helper = new WindowInteropHelper(this);
-        if (helper.Handle != IntPtr.Zero)
+        IntPtr hwnd = helper.EnsureHandle();
+        if (hwnd != IntPtr.Zero)
         {
-            int physX = (int)Math.Round(pos.X * dpiScaleX);
-            int physY = (int)Math.Round(pos.Y * dpiScaleY);
-            DwmHelper.SetWindowPos(helper.Handle, IntPtr.Zero, physX, physY, 0, 0, DwmHelper.SWP_NOSIZE | DwmHelper.SWP_NOZORDER | DwmHelper.SWP_NOACTIVATE);
+            // Always keep SWP_NOSIZE so WPF SizeToContent="Height" and PerMonitorV2 DPI scaling manage size without clipping
+            DwmHelper.SetWindowPos(hwnd, IntPtr.Zero, physPos.X, physPos.Y, 0, 0, DwmHelper.SWP_NOSIZE | DwmHelper.SWP_NOZORDER | DwmHelper.SWP_NOACTIVATE);
         }
     }
 
