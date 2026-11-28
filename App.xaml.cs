@@ -19,6 +19,9 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        // Capture cursor immediately before WPF/CLR startup work so fast mouse movement doesn't drift off the taskbar icon
+        bool hasStartupCursor = DwmHelper.GetCursorPos(out var startupCursor);
+
         DispatcherUnhandledException += (s, args) =>
         {
             DwmHelper.Log($"DispatcherUnhandledException: {args.Exception}");
@@ -86,7 +89,7 @@ public partial class App : Application
             }
             else
             {
-                _singleInstanceService.NotifyFirstInstance();
+                _singleInstanceService.NotifyFirstInstance(hasStartupCursor ? startupCursor : null);
             }
 
             _singleInstanceService.Dispose();
@@ -191,13 +194,15 @@ public partial class App : Application
 
         if (isSettingsArg)
         {
-            DwmHelper.GetCursorPos(out var pt);
+            var pt = startupCursor;
+            if (!hasStartupCursor) DwmHelper.GetCursorPos(out pt);
             _mainWindow.OpenSettingsDirectly(pt.X, pt.Y);
             DwmHelper.Log($"OnStartup completed: First instance opened directly in settings at ({pt.X}, {pt.Y})");
         }
         else if (!silent)
         {
-            DwmHelper.GetCursorPos(out var pt);
+            var pt = startupCursor;
+            if (!hasStartupCursor) DwmHelper.GetCursorPos(out pt);
             _mainWindow.ShowFlyout(pt.X, pt.Y);
             DwmHelper.Log($"OnStartup completed: First instance shown at ({pt.X}, {pt.Y})");
         }

@@ -81,9 +81,17 @@ public sealed class SingleInstanceService : IDisposable
     /// <summary>
     /// Sends a TOGGLE command to the already running primary instance over the Named Pipe.
     /// </summary>
-    public void NotifyFirstInstance()
+    public void NotifyFirstInstance(DwmHelper.POINT? cursorPos = null)
     {
-        DwmHelper.GetCursorPos(out var pt);
+        DwmHelper.POINT pt;
+        if (cursorPos.HasValue)
+        {
+            pt = cursorPos.Value;
+        }
+        else
+        {
+            DwmHelper.GetCursorPos(out pt);
+        }
         SendCommand($"TOGGLE {pt.X.ToString(CultureInfo.InvariantCulture)} {pt.Y.ToString(CultureInfo.InvariantCulture)}");
     }
 

@@ -313,6 +313,64 @@ public static class DwmHelper
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
     public static extern IntPtr FindWindow(string lpClassName, string? lpWindowName);
 
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+    private static extern IntPtr FindWindowEx(IntPtr hwndParent, IntPtr hwndChildAfter, string lpszClass, string? lpszWindow);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr WindowFromPoint(POINT Point);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetAncestor(IntPtr hwnd, uint gaFlags);
+
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    private static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
+
+    private const uint GA_ROOT = 2;
+
+    private static readonly object _taskbarCacheLock = new();
+    private static readonly System.Collections.Generic.Dictionary<IntPtr, (System.Windows.Rect Rect, long Tick)> _lastTaskbarButtonByMonitor = new();
+
+    private static bool IsTaskbarWindow(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return false;
+        IntPtr root = GetAncestor(hwnd, GA_ROOT);
+        if (root == IntPtr.Zero) root = hwnd;
+        var sb = new System.Text.StringBuilder(64);
+        if (GetClassName(root, sb, sb.Capacity) <= 0) return false;
+        string cls = sb.ToString();
+        return cls == "Shell_TrayWnd" || cls == "Shell_SecondaryTrayWnd";
+    }
+
+    private static void CacheTaskbarButton(IntPtr hMonitor, System.Windows.Rect rect)
+    {
+        if (hMonitor == IntPtr.Zero) return;
+        lock (_taskbarCacheLock)
+        {
+            _lastTaskbarButtonByMonitor[hMonitor] = (rect, Environment.TickCount64);
+        }
+    }
+
+    private static bool TryGetCachedTaskbarButton(IntPtr hMonitor, long maxAgeMs, out System.Windows.Rect rect)
+    {
+        rect = default;
+        if (hMonitor == IntPtr.Zero) return false;
+        lock (_taskbarCacheLock)
+        {
+            if (_lastTaskbarButtonByMonitor.TryGetValue(hMonitor, out var entry))
+            {
+                if (maxAgeMs < 0 || (Environment.TickCount64 - entry.Tick) <= maxAgeMs)
+                {
+                    rect = entry.Rect;
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     /// <summary>
     /// Attempts to find the exact taskbar button element under or near the specified physical screen point.
     /// Excludes elements owned by this application to avoid self-snapping.
@@ -321,6 +379,12 @@ public static class DwmHelper
     {
         try
         {
+            IntPtr hwndUnderPoint = WindowFromPoint(new POINT { X = (int)Math.Round(x), Y = (int)Math.Round(y) });
+            if (!IsTaskbarWindow(hwndUnderPoint))
+            {
+                return null;
+            }
+
             var el = AutomationElement.FromPoint(new System.Windows.Point(x, y));
             if (el != null)
             {
@@ -330,7 +394,7 @@ public static class DwmHelper
                 }
 
                 var r = el.Current.BoundingRectangle;
-                if (r.Width >= 16 && r.Height >= 16 && r.Width <= 250 && r.Height <= 120)
+                if (!r.IsEmpty && r.Width >= 16 && r.Height >= 16 && r.Width <= 250 && r.Height <= 120)
                 {
                     return new System.Windows.Rect(r.X, r.Y, r.Width, r.Height);
                 }
@@ -345,11 +409,95 @@ public static class DwmHelper
                     }
 
                     var pr = parent.Current.BoundingRectangle;
-                    if (pr.Width >= 16 && pr.Height >= 16 && pr.Width <= 250 && pr.Height <= 120)
+                    if (!pr.IsEmpty && pr.Width >= 16 && pr.Height >= 16 && pr.Width <= 250 && pr.Height <= 120)
                     {
                         return new System.Windows.Rect(pr.X, pr.Y, pr.Width, pr.Height);
                     }
                 }
+            }
+        }
+        catch {}
+
+        return null;
+    }
+
+    /// <summary>
+    /// Searches the Windows taskbar on the specified monitor for the QuickDock taskbar button.
+    /// Used when the cursor moved off the taskbar before GetCursorPos ran (e.g. cold start).
+    /// </summary>
+    public static System.Windows.Rect? FindQuickDockTaskbarButton(IntPtr hMonitor)
+    {
+        if (hMonitor == IntPtr.Zero) return null;
+
+        // Reuse very recent lookup during multi-pass RepositionWindow calls in a single flyout open
+        if (TryGetCachedTaskbarButton(hMonitor, maxAgeMs: 500, out var recentRect))
+        {
+            return recentRect;
+        }
+
+        try
+        {
+            var trayWindows = new System.Collections.Generic.List<IntPtr>();
+            IntPtr primaryTray = FindWindow("Shell_TrayWnd", null);
+            if (primaryTray != IntPtr.Zero)
+                trayWindows.Add(primaryTray);
+
+            IntPtr secTray = IntPtr.Zero;
+            while ((secTray = FindWindowEx(IntPtr.Zero, secTray, "Shell_SecondaryTrayWnd", null)) != IntPtr.Zero)
+            {
+                trayWindows.Add(secTray);
+            }
+
+            var buttonCond = new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button);
+            System.Windows.Rect? nameFallback = null;
+
+            foreach (IntPtr trayHwnd in trayWindows)
+            {
+                if (MonitorFromWindow(trayHwnd, MONITOR_DEFAULTTONEAREST) != hMonitor)
+                    continue;
+
+                var trayEl = AutomationElement.FromHandle(trayHwnd);
+                if (trayEl == null) continue;
+
+                var buttons = trayEl.FindAll(TreeScope.Descendants, buttonCond);
+                for (int i = 0; i < buttons.Count; i++)
+                {
+                    var btn = buttons[i];
+                    try
+                    {
+                        if (btn.Current.ProcessId == Environment.ProcessId)
+                            continue;
+
+                        var r = btn.Current.BoundingRectangle;
+                        if (r.IsEmpty || r.Width < 16 || r.Height < 16 || r.Width > 250 || r.Height > 120)
+                            continue;
+
+                        string autoId = btn.Current.AutomationId ?? string.Empty;
+                        string name = btn.Current.Name ?? string.Empty;
+
+                        if (autoId.Contains("QuickDock.App", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var rect = new System.Windows.Rect(r.X, r.Y, r.Width, r.Height);
+                            CacheTaskbarButton(hMonitor, rect);
+                            return rect;
+                        }
+
+                        if (!nameFallback.HasValue &&
+                            (name.Equals("QuickDock", StringComparison.OrdinalIgnoreCase) ||
+                             name.StartsWith("QuickDock - ", StringComparison.OrdinalIgnoreCase) ||
+                             name.StartsWith("QuickDock (", StringComparison.OrdinalIgnoreCase)))
+                        {
+                            nameFallback = new System.Windows.Rect(r.X, r.Y, r.Width, r.Height);
+                        }
+                    }
+                    catch {}
+                }
+            }
+
+            if (nameFallback.HasValue)
+            {
+                CacheTaskbarButton(hMonitor, nameFallback.Value);
+                return nameFallback;
             }
         }
         catch {}
@@ -458,18 +606,29 @@ public static class DwmHelper
             Log($"CalculateFlyoutPosition: Using live cursor ({physicalX}, {physicalY})");
         }
 
-        // Try to snap to the exact taskbar button under or near that click point
+        POINT pt = new POINT { X = (int)Math.Round(physicalX), Y = (int)Math.Round(physicalY) };
+        IntPtr hMonitor = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+
+        // Try to snap to the exact taskbar button under the cursor, or locate QuickDock's taskbar button on this monitor
         var btnRect = GetTaskbarButtonNear(physicalX, physicalY);
         if (btnRect.HasValue)
         {
+            CacheTaskbarButton(hMonitor, btnRect.Value);
             physicalX = btnRect.Value.Left + (btnRect.Value.Width / 2.0);
             physicalY = btnRect.Value.Top;
             Log($"CalculateFlyoutPosition: Snapped to button bounds at ({physicalX}, {physicalY})");
         }
-
-        POINT pt = new POINT { X = (int)Math.Round(physicalX), Y = (int)Math.Round(physicalY) };
-        IntPtr hMonitor = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
-        MONITORINFO mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+        else
+        {
+            btnRect = FindQuickDockTaskbarButton(hMonitor);
+            if (btnRect.HasValue)
+            {
+                physicalX = btnRect.Value.Left + (btnRect.Value.Width / 2.0);
+                physicalY = btnRect.Value.Top;
+                Log($"CalculateFlyoutPosition: Located QuickDock taskbar button at ({physicalX}, {physicalY})");
+            }
+        }
 
         if (hMonitor != IntPtr.Zero)
         {
@@ -508,7 +667,7 @@ public static class DwmHelper
         double monitorBottom = mi.rcMonitor.Bottom;
 
         // Check whether the click actually came from the taskbar band (including auto-hide edge).
-        // If not (e.g. (0,0) or launched from terminal/IDE/Start), center horizontally on the monitor.
+        // If not (e.g. cursor moved off taskbar before startup completed), fall back to cached button bounds if available.
         double autoHideBand = 60.0 * dpiScaleY;
         bool hasValidCursor = !(physicalX == 0 && physicalY == 0);
         bool isClickOnTaskbar = hasValidCursor && (btnRect.HasValue ||
@@ -517,6 +676,15 @@ public static class DwmHelper
             (physicalX >= monitorLeft && physicalX < workLeft) ||
             (physicalX >= workRight && physicalX <= monitorRight) ||
             (Math.Abs(workBottom - monitorBottom) < 1.0 && physicalY >= monitorBottom - autoHideBand));
+
+        if (!btnRect.HasValue && !isClickOnTaskbar && TryGetCachedTaskbarButton(hMonitor, maxAgeMs: -1, out var cachedBtnRect))
+        {
+            btnRect = cachedBtnRect;
+            physicalX = cachedBtnRect.Left + (cachedBtnRect.Width / 2.0);
+            physicalY = cachedBtnRect.Top;
+            isClickOnTaskbar = true;
+            Log($"CalculateFlyoutPosition: Fallback to cached taskbar button at ({physicalX}, {physicalY})");
+        }
 
         double targetLeft;
         if (workLeft > monitorLeft + 1.0)
